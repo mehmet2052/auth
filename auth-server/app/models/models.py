@@ -84,7 +84,7 @@ class Admin(Base):
     )
 
     __table_args__ = (
-        Index("ix_admins_username", "username"),
+        UniqueConstraint("username"),
     )
 
 
@@ -144,10 +144,7 @@ class License(Base):
     )
 
     __table_args__ = (
-        Index("ix_licenses_key", "key"),
-        Index("ix_licenses_status", "status"),
-        Index("ix_licenses_hwid_hash", "hwid_hash"),
-        Index("ix_licenses_expires_at", "expires_at"),
+        UniqueConstraint("key"),
     )
 
 
@@ -195,9 +192,7 @@ class Session(Base):
     license: Mapped["License"] = relationship("License", back_populates="sessions")
 
     __table_args__ = (
-        Index("ix_sessions_token_hash", "token_hash"),
-        Index("ix_sessions_license_id", "license_id"),
-        Index("ix_sessions_expires_at", "expires_at"),
+        UniqueConstraint("token_hash"),
     )
 
 
@@ -232,11 +227,7 @@ class ActivityLog(Base):
         "License", back_populates="activity_logs"
     )
 
-    __table_args__ = (
-        Index("ix_activity_logs_license_id", "license_id"),
-        Index("ix_activity_logs_action", "action"),
-        Index("ix_activity_logs_created_at", "created_at"),
-    )
+    # activity_logs için __table_args__ yok — index'ler database.py'de IF NOT EXISTS ile ekleniyor
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +251,5 @@ class UsedNonce(Base):
     )
 
     __table_args__ = (
-        Index("ix_used_nonces_nonce", "nonce"),
-        Index("ix_used_nonces_created_at", "created_at"),
+        UniqueConstraint("nonce"),
     )
