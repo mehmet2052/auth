@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     logger.info("Nexus Auth Server başlatılıyor...")
 
     # Tabloları oluştur
-    await create_tables_safe()
+    await create_tables()
     logger.info("Veritabanı tabloları hazır")
 
     # İlk admin hesabını otomatik oluştur
