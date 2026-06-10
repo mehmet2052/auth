@@ -29,13 +29,18 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def hash_password(password: str) -> str:
-    """Şifreyi bcrypt ile hashle."""
-    return pwd_context.hash(password)
+    """Şifreyi bcrypt ile hashle. bcrypt max 72 byte destekler."""
+    # bcrypt 72 byte limiti — önce SHA-256 hash al, sonra bcrypt uygula
+    import hashlib, base64
+    sha = base64.b64encode(hashlib.sha256(password.encode()).digest()).decode()
+    return pwd_context.hash(sha)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """Şifre doğrulama — timing-safe."""
-    return pwd_context.verify(plain, hashed)
+    import hashlib, base64
+    sha = base64.b64encode(hashlib.sha256(plain.encode()).digest()).decode()
+    return pwd_context.verify(sha, hashed)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
