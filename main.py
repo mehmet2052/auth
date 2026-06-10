@@ -11,11 +11,31 @@ from slowapi.errors import RateLimitExceeded
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging, logger
-from app.db.database import create_tables
+from app.core.security import hash_password
+from app.db.database import create_tables, AsyncSessionLocal
 from app.middleware.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.api.routes import auth, admin
+from app.models.models import Admin
 
 settings = get_settings()
+
+
+async def _ensure_admin() -> None:
+    """Başlangıçta admin yoksa .env'den otomatik oluştur."""
+    async with AsyncSessionLocal() as db:
+        from sqlalchemy import select
+        result = await db.execute(select(Admin).where(Admin.username == settings.admin_username))
+        if result.scalar_one_or_none():
+            logger.info(f"Admin '{settings.admin_username}' zaten mevcut")
+            return
+        admin = Admin(
+            username=settings.admin_username,
+            password_hash=hash_password(settings.admin_password),
+            is_active=True,
+        )
+        db.add(admin)
+        await db.commit()
+        logger.info(f"Admin '{settings.admin_username}' otomatik oluşturuldu")
 
 
 @asynccontextmanager
@@ -24,11 +44,12 @@ async def lifespan(app: FastAPI):
     setup_logging(settings.debug)
     logger.info("Nexus Auth Server başlatılıyor...")
 
-    # Tabloları oluştur (geliştirme için)
-    # Production'da: alembic upgrade head
-    if settings.debug:
-        await create_tables()
-        logger.info("Veritabanı tabloları oluşturuldu (debug modu)")
+    # Tabloları oluştur
+    await create_tables()
+    logger.info("Veritabanı tabloları oluşturuldu")
+
+    # İlk admin hesabını otomatik oluştur
+    await _ensure_admin()
 
     logger.info(f"Nexus Auth Server hazır. Debug={settings.debug}")
     yield
