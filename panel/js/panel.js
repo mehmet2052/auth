@@ -3,7 +3,7 @@
  * API ile iletişim, lisans yönetimi, log görüntüleme.
  */
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "https://auth-71s4.onrender.com";
 let authToken = null;
 let currentPage = { licenses: 1, logs: 1 };
 

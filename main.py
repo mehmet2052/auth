@@ -69,18 +69,14 @@ app = FastAPI(
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 
-# Trusted Host — SSRF koruması
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=settings.allowed_hosts.split(","),
-)
+# TrustedHost middleware kaldırıldı — Render proxy ile uyumsuz
 
-# CORS
+# CORS — panel origin'lerine izin ver
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_origins=["*"],  # Panel deploy URL'si
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
