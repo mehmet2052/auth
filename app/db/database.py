@@ -56,6 +56,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def create_tables() -> None:
-    """Tüm tabloları oluştur (geliştirme için — production'da Alembic kullan)."""
+    """Tüm tabloları oluştur — zaten varsa atla."""
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all, checkfirst=True)
