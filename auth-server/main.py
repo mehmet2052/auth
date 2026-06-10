@@ -12,7 +12,7 @@ from slowapi.errors import RateLimitExceeded
 from app.core.config import get_settings
 from app.core.logging import setup_logging, logger
 from app.core.security import hash_password
-from app.db.database import create_tables, AsyncSessionLocal
+from app.db.database import create_tables, create_tables_safe, AsyncSessionLocal
 from app.middleware.rate_limiter import limiter, rate_limit_exceeded_handler
 from app.api.routes import auth, admin
 from app.models.models import Admin
@@ -45,8 +45,8 @@ async def lifespan(app: FastAPI):
     logger.info("Nexus Auth Server başlatılıyor...")
 
     # Tabloları oluştur
-    await create_tables()
-    logger.info("Veritabanı tabloları oluşturuldu")
+    await create_tables_safe()
+    logger.info("Veritabanı tabloları hazır")
 
     # İlk admin hesabını otomatik oluştur
     await _ensure_admin()
