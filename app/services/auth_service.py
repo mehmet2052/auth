@@ -1,0 +1,232 @@
+"""
+Auth Service — İstemci doğrulama iş mantığı.
+
+Akış:
+1. Nonce kontrolü (replay attack)
+2. Lisans key doğrulama
+3. Lisans durumu kontrolü
+4. HWID eşleştirme / ilk aktivasyon
+5. Session token oluşturma
+6. Log kaydı
+"""
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.core.security import hash_hwid, create_access_token
+from app.models.models import LicenseType, LicenseStatus, LogAction
+from app.repositories.license_repo import LicenseRepository, ActivityLogRepository
+from app.repositories.session_repo import SessionRepository, NonceRepository
+from app.schemas.schemas import AuthRequest, AuthResponse, HeartbeatRequest, HeartbeatResponse
+from app.core.logging import logger
+
+settings = get_settings()
+
+
+def _calculate_expiry(license_type: LicenseType) -> Optional[datetime]:
+    """Lisans tipine göre bitiş tarihini hesapla — sunucu saatine göre."""
+    now = datetime.now(timezone.utc)
+    durations = {
+        LicenseType.ONE_DAY:    timedelta(days=1),
+        LicenseType.THREE_DAY:  timedelta(days=3),
+        LicenseType.SEVEN_DAY:  timedelta(days=7),
+        LicenseType.THIRTY_DAY: timedelta(days=30),
+        LicenseType.LIFETIME:   None,
+    }
+    delta = durations.get(license_type)
+    return (now + delta) if delta else None
+
+
+class AuthService:
+    """İstemci doğrulama servisi."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+        self.license_repo   = LicenseRepository(db)
+        self.session_repo   = SessionRepository(db)
+        self.nonce_repo     = NonceRepository(db)
+        self.log_repo       = ActivityLogRepository(db)
+
+    async def authenticate(
+        self,
+        request: AuthRequest,
+        ip_address: Optional[str] = None,
+    ) -> AuthResponse:
+        """
+        Tam doğrulama akışı.
+        Hata durumunda ValueError fırlatır.
+        """
+        # ── 1. Nonce kontrolü ─────────────────────────────────────────────────
+        if await self.nonce_repo.is_used(request.nonce):
+            logger.warning("Replay attack tespit edildi", extra={"ip": ip_address})
+            raise ValueError("Bu istek zaten işlendi (replay attack koruması)")
+
+        # ── 2. Lisans key doğrulama ───────────────────────────────────────────
+        license_ = await self.license_repo.get_by_key(request.key)
+        if not license_:
+            await self._log(LogAction.AUTH_FAILED, ip_address=ip_address,
+                            detail="Lisans bulunamadı")
+            raise ValueError("Geçersiz lisans anahtarı")
+
+        # ── 3. Lisans durum kontrolü ──────────────────────────────────────────
+        if license_.status == LicenseStatus.SUSPENDED:
+            await self._log(LogAction.AUTH_SUSPENDED, license_.id, ip_address,
+                            detail="Askıya alınmış lisans")
+            raise ValueError("Bu lisans askıya alınmış")
+
+        if license_.status == LicenseStatus.REVOKED:
+            await self._log(LogAction.AUTH_FAILED, license_.id, ip_address,
+                            detail="İptal edilmiş lisans")
+            raise ValueError("Bu lisans iptal edilmiş")
+
+        if license_.status == LicenseStatus.EXPIRED:
+            await self._log(LogAction.AUTH_EXPIRED, license_.id, ip_address,
+                            detail="Süresi dolmuş lisans")
+            raise ValueError("Lisans süresi dolmuş")
+
+        # Süresi geçmiş ama status güncellenmemişse kontrol et
+        if (
+            license_.expires_at
+            and license_.expires_at < datetime.now(timezone.utc)
+        ):
+            await self.license_repo.update_status(license_.id, LicenseStatus.EXPIRED)
+            await self._log(LogAction.AUTH_EXPIRED, license_.id, ip_address,
+                            detail="Gerçek zamanlı süre kontrolü")
+            raise ValueError("Lisans süresi dolmuş")
+
+        # ── 4. HWID eşleştirme ────────────────────────────────────────────────
+        hwid_hash = hash_hwid(request.hwid)
+
+        if license_.status == LicenseStatus.ACTIVE and not license_.hwid_hash:
+            # İlk aktivasyon — HWID bağla
+            expires_at = _calculate_expiry(license_.license_type)
+            license_ = await self.license_repo.activate(
+                license_, hwid_hash, expires_at
+            )
+            logger.info(
+                "Lisans ilk kez aktive edildi",
+                extra={"license_id": str(license_.id), "ip": ip_address}
+            )
+        elif license_.hwid_hash and license_.hwid_hash != hwid_hash:
+            # HWID uyuşmuyor
+            await self._log(
+                LogAction.HWID_MISMATCH, license_.id, ip_address,
+                hwid_hash=hwid_hash,
+                detail="HWID eşleşmedi"
+            )
+            raise ValueError("Bu lisans farklı bir donanıma bağlı")
+
+        # ── 5. Nonce'u kullanılmış olarak işaretle ────────────────────────────
+        await self.nonce_repo.mark_used(request.nonce)
+
+        # ── 6. Session token oluştur ──────────────────────────────────────────
+        session_token = secrets.token_urlsafe(48)
+        session_expires = datetime.now(timezone.utc) + timedelta(
+            hours=settings.session_token_expire_hours
+        )
+
+        await self.session_repo.create(
+            license_id=license_.id,
+            token=session_token,
+            hwid_hash=hwid_hash,
+            expires_at=session_expires,
+            ip_address=ip_address,
+        )
+
+        # ── 7. Log kaydı ──────────────────────────────────────────────────────
+        await self._log(
+            LogAction.AUTH_SUCCESS, license_.id, ip_address,
+            hwid_hash=hwid_hash,
+            detail=f"Client v{request.version}"
+        )
+
+        await self.db.commit()
+
+        logger.info(
+            "Başarılı auth",
+            extra={"license_id": str(license_.id), "ip": ip_address}
+        )
+
+        return AuthResponse(
+            session_token=session_token,
+            expires_at=session_expires,
+        )
+
+    async def heartbeat(
+        self,
+        request: HeartbeatRequest,
+        ip_address: Optional[str] = None,
+    ) -> HeartbeatResponse:
+        """
+        Oturum yenileme.
+        Token geçerliyse ve HWID eşleşiyorsa onaylar.
+        """
+        # ── Nonce kontrolü ────────────────────────────────────────────────────
+        if await self.nonce_repo.is_used(request.nonce):
+            raise ValueError("Tekrar eden istek")
+
+        # ── Session doğrulama ─────────────────────────────────────────────────
+        session = await self.session_repo.get_by_token(request.session_token)
+        if not session:
+            await self._log(LogAction.HEARTBEAT_FAIL, ip_address=ip_address,
+                            detail="Session bulunamadı")
+            return HeartbeatResponse(valid=False, message="Geçersiz session")
+
+        # Session süresi kontrolü
+        if session.expires_at < datetime.now(timezone.utc):
+            await self.session_repo.invalidate(session.id)
+            return HeartbeatResponse(valid=False, message="Session süresi doldu")
+
+        # HWID kontrolü
+        hwid_hash = hash_hwid(request.hwid)
+        if session.hwid_hash != hwid_hash:
+            await self._log(
+                LogAction.HWID_MISMATCH,
+                session.license_id, ip_address,
+                hwid_hash=hwid_hash,
+                detail="Heartbeat HWID uyuşmazlığı"
+            )
+            await self.session_repo.invalidate(session.id)
+            return HeartbeatResponse(valid=False, message="HWID uyuşmazlığı")
+
+        # Lisans hâlâ geçerli mi?
+        license_ = await self.license_repo.get_by_id(session.license_id)
+        if not license_ or license_.status in (
+            LicenseStatus.SUSPENDED, LicenseStatus.REVOKED, LicenseStatus.EXPIRED
+        ):
+            await self.session_repo.invalidate(session.id)
+            return HeartbeatResponse(valid=False, message="Lisans artık geçerli değil")
+
+        # Nonce'u kullanılmış işaretle ve heartbeat güncelle
+        await self.nonce_repo.mark_used(request.nonce)
+        await self.session_repo.update_heartbeat(session.id, request.nonce)
+        await self._log(
+            LogAction.HEARTBEAT_OK, session.license_id, ip_address
+        )
+        await self.db.commit()
+
+        return HeartbeatResponse(
+            valid=True,
+            expires_at=session.expires_at,
+            message="OK"
+        )
+
+    async def _log(
+        self,
+        action: LogAction,
+        license_id=None,
+        ip_address: Optional[str] = None,
+        hwid_hash: Optional[str] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        """İç log yardımcısı."""
+        await self.log_repo.create(
+            action=action,
+            license_id=license_id,
+            ip_address=ip_address,
+            hwid_hash=hwid_hash,
+            detail=detail,
+        )
