@@ -49,6 +49,7 @@ class RedisRateLimiter:
     async def is_allowed(self, key: str) -> tuple[bool, int, int]:
         """
         Check if request is allowed.
+        Fail-open: if Redis is unavailable, allow the request (skip rate limiting).
         
         Returns:
             (allowed, remaining, reset_timestamp)
@@ -56,8 +57,8 @@ class RedisRateLimiter:
         try:
             redis = await get_redis()
         except RuntimeError:
-            # Redis unavailable — fail closed (reject request)
-            return False, 0, 0
+            # Redis unavailable — fail open (allow request, skip rate limiting)
+            return True, self.max_requests, 0
         
         now = int(time.time())
         window_start = now - self.window_seconds
@@ -118,7 +119,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         ip = _get_client_ip(request)
         
         # Check global rate limit
-        allowed, remaining, reset_at = await self.global_limiter.is_allowed(ip)
+        try:
+            allowed, remaining, reset_at = await self.global_limiter.is_allowed(ip)
+        except Exception:
+            # Any unexpected error — fail open, allow request
+            allowed, remaining, reset_at = True, self.global_limiter.max_requests, 0
         
         if not allowed:
             return JSONResponse(
