@@ -59,10 +59,14 @@ class AuthService:
         Tam doğrulama akışı.
         Hata durumunda ValueError fırlatır.
         """
-        # ── 1. Nonce kontrolü ─────────────────────────────────────────────────
+        # ── 1. Nonce kontrolü — EARLY COMMIT: replay koruması transaction
+        #    bağımsız çalışmalı, lisans doğrulamasından önce commit edilmeli
         if await self.nonce_repo.is_used(request.nonce):
             logger.warning("Replay attack tespit edildi", extra={"ip": ip_address})
             raise ValueError("Bu istek zaten işlendi (replay attack koruması)")
+
+        await self.nonce_repo.mark_used(request.nonce)
+        await self.db.commit()  # Replay koruması: nonce hemen kalıcı hale getir
 
         # ── 2. Lisans key doğrulama ───────────────────────────────────────────
         license_ = await self.license_repo.get_by_key(request.key)
@@ -119,10 +123,10 @@ class AuthService:
             )
             raise ValueError("Bu lisans farklı bir donanıma bağlı")
 
-        # ── 5. Nonce'u kullanılmış olarak işaretle ────────────────────────────
-        await self.nonce_repo.mark_used(request.nonce)
+        # ── 5. Mevcut session'ları invalidate et (tek cihaz politikası)
+        await self.session_repo.invalidate_all_for_license(license_.id)
 
-        # ── 6. Session token oluştur ──────────────────────────────────────────
+        # ── 7. Session token oluştur ──────────────────────────────────────────
         session_token = secrets.token_urlsafe(48)
         session_expires = datetime.now(timezone.utc) + timedelta(
             hours=settings.session_token_expire_hours
@@ -146,7 +150,7 @@ class AuthService:
         await self.db.commit()
 
         logger.info(
-            "Başarılı auth",
+            "Başarılı auth — önceki session'lar invalidate edildi",
             extra={"license_id": str(license_.id), "ip": ip_address}
         )
 
@@ -164,9 +168,12 @@ class AuthService:
         Oturum yenileme.
         Token geçerliyse ve HWID eşleşiyorsa onaylar.
         """
-        # ── Nonce kontrolü ────────────────────────────────────────────────────
+        # ── Nonce kontrolü — EARLY COMMIT ─────────────────────────────────────
         if await self.nonce_repo.is_used(request.nonce):
             raise ValueError("Tekrar eden istek")
+
+        await self.nonce_repo.mark_used(request.nonce)
+        await self.db.commit()  # Replay koruması
 
         # ── Session doğrulama ─────────────────────────────────────────────────
         session = await self.session_repo.get_by_token(request.session_token)
@@ -200,8 +207,7 @@ class AuthService:
             await self.session_repo.invalidate(session.id)
             return HeartbeatResponse(valid=False, message="Lisans artık geçerli değil")
 
-        # Nonce'u kullanılmış işaretle ve heartbeat güncelle
-        await self.nonce_repo.mark_used(request.nonce)
+        # Heartbeat güncelle
         await self.session_repo.update_heartbeat(session.id, request.nonce)
         await self._log(
             LogAction.HEARTBEAT_OK, session.license_id, ip_address

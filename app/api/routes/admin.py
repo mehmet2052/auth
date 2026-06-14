@@ -52,6 +52,7 @@ async def admin_login(
     response_model=list[LicenseResponse],
     summary="Lisans oluştur",
 )
+@limiter.limit("30/minute")
 async def create_licenses(
     body: LicenseCreateRequest,
     db: DBDep,
@@ -67,6 +68,7 @@ async def create_licenses(
     response_model=LicenseListResponse,
     summary="Lisans listesi",
 )
+@limiter.limit("60/minute")
 async def list_licenses(
     db: DBDep,
     admin: AdminDep,
@@ -84,6 +86,7 @@ async def list_licenses(
     response_model=MessageResponse,
     summary="Lisansı askıya al",
 )
+@limiter.limit("30/minute")
 async def suspend_license(
     license_id: uuid.UUID,
     db: DBDep,
@@ -101,6 +104,7 @@ async def suspend_license(
     response_model=MessageResponse,
     summary="Lisansı iptal et",
 )
+@limiter.limit("30/minute")
 async def revoke_license(
     license_id: uuid.UUID,
     db: DBDep,
@@ -118,6 +122,7 @@ async def revoke_license(
     response_model=MessageResponse,
     summary="HWID sıfırla",
 )
+@limiter.limit("30/minute")
 async def reset_hwid(
     body: HwidResetRequest,
     db: DBDep,
@@ -139,6 +144,7 @@ async def reset_hwid(
     response_model=ActivityLogListResponse,
     summary="Aktivite logları",
 )
+@limiter.limit("60/minute")
 async def get_logs(
     db: DBDep,
     admin: AdminDep,

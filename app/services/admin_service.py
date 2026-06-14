@@ -36,8 +36,14 @@ class AdminService:
         """
         admin = await self.admin_repo.get_by_username(request.username)
 
-        # Timing-safe kontrol — kullanıcı bulunamasa da aynı süre geçsin
-        if not admin or not verify_password(request.password, admin.password_hash):
+        # Timing-safe kontrol — her zaman verify_password çalıştır
+        # (admin yoksa dummy hash ile, süre farkı vermemek için)
+        stored_hash = admin.password_hash if admin else (
+            "$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW"
+        )
+        password_ok = verify_password(request.password, stored_hash)
+
+        if not admin or not password_ok:
             await self.log_repo.create(
                 action=LogAction.ADMIN_LOGIN_FAIL,
                 ip_address=ip_address,

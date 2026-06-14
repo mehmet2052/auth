@@ -3,9 +3,10 @@ Nexus Auth Server — FastAPI uygulama giriş noktası.
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -67,9 +68,29 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.debug else None,
 )
 
+# ── Security Headers Middleware ─────────────────────────────────────────────
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    return response
+
+# ── Trusted Host Middleware ─────────────────────────────────────────────────
+
+if not settings.debug and settings.allowed_hosts != "*":
+    allowed = [h.strip() for h in settings.allowed_hosts.split(",")]
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed)
+
 # ── Middleware ────────────────────────────────────────────────────────────────
 
-# CORS — panel URL whitelist. Render proxy uyumu için allow_credentials=False
+# CORS — panel URL whitelist
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list if not settings.debug else ["*"],

@@ -8,6 +8,17 @@ let authToken = null;
 let currentPage = { licenses: 1, logs: 1 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Güvenlik Yardımcıları
+// ─────────────────────────────────────────────────────────────────────────────
+
+function escapeHtml(text) {
+    if (!text) return "";
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // API Yardımcıları
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -206,7 +217,7 @@ async function doCreateLicense() {
         loadLicenses(1);
     } catch (e) {
         resultEl.style.color = "#f44336";
-        resultEl.textContent = "Hata: " + e.message;
+        resultEl.textContent = "Hata: " + escapeHtml(e.message);
     }
 }
 
@@ -252,13 +263,13 @@ function renderLogs(items) {
     }
     tbody.innerHTML = items.map(log => `
         <tr>
-            <td style="font-size:11px;color:#888">${fmtDate(log.created_at)}</td>
-            <td><span style="color:${actionColor(log.action)};font-size:12px">${log.action}</span></td>
-            <td style="font-size:12px;color:#888">${log.ip_address || '-'}</td>
+            <td style="font-size:11px;color:#888">${escapeHtml(fmtDate(log.created_at))}</td>
+            <td><span style="color:${actionColor(log.action)};font-size:12px">${escapeHtml(log.action)}</span></td>
+            <td style="font-size:12px;color:#888">${escapeHtml(log.ip_address || '-')}</td>
             <td style="font-family:monospace;font-size:11px;color:#888">
-                ${log.license_id ? log.license_id.substring(0, 8) + '...' : '-'}
+                ${log.license_id ? escapeHtml(log.license_id.substring(0, 8)) + '...' : '-'}
             </td>
-            <td style="font-size:12px;color:#aaa">${log.detail || '-'}</td>
+            <td style="font-size:12px;color:#aaa">${escapeHtml(log.detail || '-')}</td>
         </tr>
     `).join("");
 }
