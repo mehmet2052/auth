@@ -17,8 +17,13 @@ from app.core.security import hash_password, validate_csrf_token
 from app.core.redis import close_redis
 from app.db.database import create_tables, AsyncSessionLocal
 from app.middleware.rate_limiter import RateLimitMiddleware
+from app.middleware.hmac_signing import HMACSigningMiddleware
 from app.api.routes import auth, admin, csrf
+from app.api.routes import reseller as reseller_routes
 from app.models.models import Admin, AdminRole
+# v2 model imports — ensure Base.metadata includes these tables
+from app.models import webhook as _webhook_models  # noqa: F401
+from app.models import anomaly as _anomaly_models  # noqa: F401
 
 settings = get_settings()
 
@@ -108,6 +113,8 @@ _CSRF_EXEMPT_PREFIXES = (
     "/api/v1/auth",
     "/api/v1/heartbeat",
     "/api/v1/csrf-token",
+    "/api/v1/reseller/login",
+    "/api/v1/reseller/refresh",
     "/health",
     "/docs",
     "/redoc",
@@ -189,11 +196,15 @@ app.add_middleware(
 # Rate Limiter (Redis-backed)
 app.add_middleware(RateLimitMiddleware, global_limit=100, window_seconds=60)
 
+# HMAC Signing Middleware — dual auth mode (legacy + secure) for client endpoints
+app.add_middleware(HMACSigningMiddleware)
+
 # ── Router'lar ────────────────────────────────────────────────────────────────
 
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(csrf.router)
+app.include_router(reseller_routes.router)
 
 # Admin paneli — serve HTML with nonce injection, static assets separately
 _PANEL_DIR = Path(__file__).parent / "panel"

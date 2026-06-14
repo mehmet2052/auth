@@ -76,6 +76,11 @@ class AuthService:
         if not license_:
             await self._log(LogAction.AUTH_FAILED, ip_address=ip_address,
                             detail="Lisans bulunamadı")
+            await self._dispatch_webhook("login_failed", {
+                "key_partial": request.key[:8] + "...",
+                "ip": ip_address,
+                "reason": "License not found",
+            })
             raise ValueError("Geçersiz lisans anahtarı")
 
         # ── 3. Lisans durum kontrolü ──────────────────────────────────────────
@@ -93,6 +98,11 @@ class AuthService:
             await self._log(LogAction.AUTH_FAILED, license_.id, ip_address,
                             detail="Yasaklanmış lisans")
             raise ValueError("Bu lisans yasaklanmış")
+
+        if license_.status == LicenseStatus.LOCKED:
+            await self._log(LogAction.AUTH_FAILED, license_.id, ip_address,
+                            detail="Kilitli lisans (şüpheli aktivite)")
+            raise ValueError("Bu lisans şüpheli aktivite nedeniyle kilitlendi")
 
         if license_.status == LicenseStatus.EXPIRED:
             await self._log(LogAction.AUTH_EXPIRED, license_.id, ip_address,
@@ -137,6 +147,14 @@ class AuthService:
                 discord_id=request.discord_id,
             )
             
+            # HWID first_seen / last_seen set
+            now_utc = datetime.now(timezone.utc)
+            license_.hwid_first_seen = now_utc
+            license_.hwid_last_seen = now_utc
+            if hasattr(request, 'hwid_components') and request.hwid_components:
+                license_.hwid_components_hash = hash_hwid(request.hwid_components)
+            await self.db.flush()
+
             logger.info(
                 "Lisans ilk kez aktive edildi",
                 extra={"license_id": str(license_.id), "ip": ip_address}
@@ -148,7 +166,26 @@ class AuthService:
                 hwid_hash=hwid_hash,
                 detail="HWID eşleşmedi"
             )
+            # Webhook dispatch point — hwid_mismatch (wired in Task 3)
+            await self._dispatch_webhook("hwid_mismatch", {
+                "key_partial": license_.key[:8] + "...",
+                "ip": ip_address,
+                "expected_hwid_partial": license_.hwid_hash[:12] + "..." if license_.hwid_hash else None,
+                "got_hwid_partial": hwid_hash[:12] + "...",
+            })
             raise ValueError("Bu lisans farklı bir donanıma bağlı")
+
+        # HWID last_seen güncelle (başarılı auth)
+        if license_.hwid_hash and license_.hwid_hash == hwid_hash:
+            license_.hwid_last_seen = datetime.now(timezone.utc)
+            if hasattr(request, 'hwid_components') and request.hwid_components:
+                new_components_hash = hash_hwid(request.hwid_components)
+                if license_.hwid_components_hash and license_.hwid_components_hash != new_components_hash:
+                    await self._log(
+                        LogAction.SUSPICIOUS_ACTIVITY, license_.id, ip_address,
+                        detail="HWID component hash değişikliği tespit edildi"
+                    )
+            await self.db.flush()
 
         # ── 4.5 Discord ID bağlama ─────────────────────────────────────────
         if not license_.discord_id:
@@ -204,14 +241,30 @@ class AuthService:
 
         await self.db.commit()
 
+        # Webhook dispatch — login_success (non-blocking, wired in Task 3)
+        await self._dispatch_webhook("login_success", {
+            "key_partial": license_.key[:8] + "...",
+            "ip": ip_address,
+            "hwid_partial": hwid_hash[:12] + "...",
+            "discord_id": request.discord_id,
+        })
+
         logger.info(
             "Başarılı auth — önceki session'lar invalidate edildi",
             extra={"license_id": str(license_.id), "ip": ip_address}
         )
 
+        # Include feature_flags in response
+        import json as _json
+        try:
+            flags = _json.loads(license_.feature_flags) if license_.feature_flags else {}
+        except (TypeError, _json.JSONDecodeError):
+            flags = {}
+
         return AuthResponse(
             session_token=session_token,
             expires_at=session_expires,
+            feature_flags=flags,
         )
 
     async def heartbeat(
@@ -257,7 +310,8 @@ class AuthService:
         # Lisans hâlâ geçerli mi?
         license_ = await self.license_repo.get_by_id(session.license_id)
         if not license_ or license_.status in (
-            LicenseStatus.SUSPENDED, LicenseStatus.REVOKED, LicenseStatus.EXPIRED
+            LicenseStatus.SUSPENDED, LicenseStatus.REVOKED, LicenseStatus.EXPIRED,
+            LicenseStatus.LOCKED
         ):
             await self.session_repo.invalidate(session.id)
             return HeartbeatResponse(valid=False, message="Lisans artık geçerli değil")
@@ -291,3 +345,22 @@ class AuthService:
             hwid_hash=hwid_hash,
             detail=detail,
         )
+
+    async def _dispatch_webhook(
+        self,
+        event_type: str,
+        data: dict,
+    ) -> None:
+        """
+        Webhook dispatch stub — fires non-blocking webhook for given event.
+        Actual dispatch is handled by WebhookService (wired in Task 3).
+        Uses fire-and-forget to never block auth flow.
+        """
+        try:
+            from app.services.webhook_service import WebhookService
+            import asyncio
+            asyncio.create_task(
+                WebhookService.dispatch_event_static(event_type, data)
+            )
+        except Exception:
+            pass  # Webhook dispatch must never break auth flow

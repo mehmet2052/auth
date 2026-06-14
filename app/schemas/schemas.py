@@ -45,6 +45,11 @@ class AuthRequest(BaseModel):
         description="Replay attack koruması için benzersiz değer"
     )
     version: int = Field(..., ge=1, description="Client versiyon numarası")
+    hwid_components: Optional[str] = Field(
+        None,
+        max_length=512,
+        description="HWID component hashes (CPU|GPU|Disk|BIOS|OS) — optional enhanced fingerprinting"
+    )
 
     @field_validator("key")
     @classmethod
@@ -85,6 +90,7 @@ class AuthResponse(BaseModel):
     session_token: str
     expires_at: datetime
     message: str = "Authentication successful"
+    feature_flags: Optional[dict] = None
 
 
 class HeartbeatRequest(BaseModel):
@@ -207,6 +213,7 @@ class LicenseCreateRequest(BaseModel):
     note: Optional[str] = Field(None, max_length=500)
     count: int = Field(1, ge=1, le=100, description="Kaç adet oluşturulsun")
     discord_id: Optional[str] = Field(None, description="Pre-bind Discord ID (opsiyonel)")
+    feature_flags: Optional[dict] = Field(None, description="Feature flags (JSON object)")
 
     @field_validator("discord_id")
     @classmethod
@@ -231,6 +238,11 @@ class LicenseResponse(BaseModel):
     activation_count: int
     max_activations: int
     note: Optional[str]
+    feature_flags: Optional[dict] = None
+    status_reason: Optional[str] = None
+    hwid_first_seen: Optional[datetime] = None
+    hwid_last_seen: Optional[datetime] = None
+    hwid_reset_count: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -309,3 +321,151 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     success: bool = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v2 Schemas — License State Transition
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LicenseStatusTransitionRequest(BaseModel):
+    """Lisans durum geçişi isteği."""
+    new_status: LicenseStatus
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v2 Schemas — Webhook
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WebhookCreateRequest(BaseModel):
+    """Webhook oluşturma isteği."""
+    url: str = Field(..., max_length=512)
+    event_types: list[str] = Field(..., description="Event type listesi")
+    schema_version: str = Field("1.0", description="Payload schema version (semver)")
+    secret: Optional[str] = Field(None, max_length=256, description="HMAC signing secret")
+
+
+class WebhookUpdateRequest(BaseModel):
+    """Webhook güncelleme isteği."""
+    url: Optional[str] = Field(None, max_length=512)
+    event_types: Optional[list[str]] = None
+    schema_version: Optional[str] = None
+    is_active: Optional[bool] = None
+    secret: Optional[str] = Field(None, max_length=256)
+
+
+class WebhookResponse(BaseModel):
+    """Webhook yanıtı."""
+    id: uuid.UUID
+    url: str
+    event_types: list[str]
+    schema_version: str
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WebhookListResponse(BaseModel):
+    """Webhook listesi yanıtı."""
+    items: list[WebhookResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v2 Schemas — Anomaly Rules
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AnomalyRuleResponse(BaseModel):
+    """Anomaly rule yanıtı."""
+    id: uuid.UUID
+    name: str
+    is_enabled: bool
+    threshold: int
+    window_seconds: int
+    action: str
+    cooldown_seconds: int
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AnomalyRuleUpdateRequest(BaseModel):
+    """Anomaly rule güncelleme isteği."""
+    is_enabled: Optional[bool] = None
+    threshold: Optional[int] = Field(None, ge=1)
+    window_seconds: Optional[int] = Field(None, ge=10)
+    action: Optional[str] = None
+    cooldown_seconds: Optional[int] = Field(None, ge=0)
+
+
+class AnomalyRuleListResponse(BaseModel):
+    """Anomaly rule listesi."""
+    items: list[AnomalyRuleResponse]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v2 Schemas — Reseller (separate entity)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ResellerLoginRequest(BaseModel):
+    """Reseller giriş isteği."""
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=8, max_length=256)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9_\-\.]+$', v):
+            raise ValueError("Geçersiz kullanıcı adı")
+        return v.strip()
+
+
+class ResellerLoginResponse(BaseModel):
+    """Reseller giriş yanıtı."""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_at: datetime
+    role: str = "reseller"
+
+
+class ResellerCreateV2Request(BaseModel):
+    """Reseller oluşturma isteği (v2 — separate table)."""
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=8, max_length=256)
+    key_quota_limit: Optional[int] = Field(None, ge=1, description="Lifetime max key sayısı")
+    daily_key_limit: Optional[int] = Field(None, ge=1, description="Günlük max key sayısı")
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9_\-\.]+$', v):
+            raise ValueError("Geçersiz kullanıcı adı")
+        return v.strip()
+
+
+class ResellerResponse(BaseModel):
+    """Reseller yanıtı (v2)."""
+    id: uuid.UUID
+    username: str
+    is_active: bool
+    created_at: datetime
+    last_login: Optional[datetime]
+    key_quota_limit: Optional[int]
+    keys_created_count: int
+    daily_key_limit: Optional[int]
+    daily_keys_created_today: int
+
+    model_config = {"from_attributes": True}
+
+
+class ResellerListResponse(BaseModel):
+    """Reseller listesi yanıtı."""
+    items: list[ResellerResponse]
+    total: int
+    page: int
+    page_size: int

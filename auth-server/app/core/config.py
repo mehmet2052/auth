@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     rate_limit_auth: str = "10/minute"
     rate_limit_heartbeat: str = "30/minute"
 
+    # Dual Auth Mode (v2)
+    auth_mode_legacy_enabled: bool = True
+    auth_mode_secure_enabled: bool = True
+    hmac_timestamp_tolerance_seconds: int = 30
+
+    # Anomaly Detection (v2)
+    anomaly_detection_enabled: bool = True
+
     # App
     debug: bool = False
     app_version: str = "1.0.0"

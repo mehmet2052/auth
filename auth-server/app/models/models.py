@@ -18,6 +18,9 @@ from sqlalchemy.types import TypeDecorator
 
 from app.db.database import Base
 
+# Ensure Reseller is registered with Base metadata (needed for FK resolution)
+from app.models.reseller import Reseller  # noqa: F401
+
 
 class StrEnum(TypeDecorator):
     """
@@ -70,13 +73,23 @@ class LicenseType(str, PyEnum):
 
 
 class LicenseStatus(str, PyEnum):
-    """Lisans durumu."""
+    """Lisans durumu — genişletilmiş state machine."""
+    # Original states
     ACTIVE    = "active"      # Aktif ve kullanılabilir
     USED      = "used"        # Aktive edildi
     EXPIRED   = "expired"     # Süresi doldu
     SUSPENDED = "suspended"   # Yönetici tarafından askıya alındı
     REVOKED   = "revoked"     # İptal edildi
     BANNED    = "banned"      # Kalıcı olarak yasaklandı
+    # Extended states (v2)
+    CREATED   = "created"     # Oluşturuldu, henüz aktif değil
+    RESERVED  = "reserved"    # Rezerve edildi
+    BOUND     = "bound"       # HWID/Discord bağlandı
+    VERIFIED  = "verified"    # Doğrulandı
+    LOCKED    = "locked"      # Şüpheli aktivite nedeniyle kilitlendi
+    RENEWED   = "renewed"     # Yenilendi
+    TRANSFERRED = "transferred"  # Transfer edildi
+    DELETED   = "deleted"     # Silindi
 
 
 class LogAction(str, PyEnum):
@@ -95,6 +108,12 @@ class LogAction(str, PyEnum):
     ADMIN_LOGIN_FAIL= "admin_login_fail"
     DISCORD_MISMATCH = "discord_mismatch"
     ACTIVATION_LIMIT = "activation_limit"
+    # Extended actions (v2)
+    SUSPICIOUS_ACTIVITY = "suspicious_activity"
+    AUTO_LOCKED     = "auto_locked"
+    IP_ANOMALY      = "ip_anomaly"
+    WEBHOOK_FAILED  = "webhook_failed"
+    STATE_TRANSITION = "state_transition"
 
 
 class ActivationAction(str, PyEnum):
@@ -202,12 +221,33 @@ class License(Base):
     # Not alanı
     note: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Feature flags (JSON string, default '{}')
+    feature_flags: Mapped[Optional[str]] = mapped_column(Text, default="{}")
+
+    # State transition audit
+    status_reason: Mapped[Optional[str]] = mapped_column(Text)
+    previous_status: Mapped[Optional[str]] = mapped_column(String(32))
+
+    # HWID extended tracking (v2)
+    hwid_components_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    hwid_first_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    hwid_last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    hwid_reset_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Reseller FK (v2 — nullable, NULL for admin-created keys)
+    reseller_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("resellers.id", ondelete="SET NULL")
+    )
+
     # Kim oluşturdu
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admins.id", ondelete="SET NULL")
     )
     created_by_admin: Mapped[Optional["Admin"]] = relationship(
         "Admin", back_populates="licenses"
+    )
+    created_by_reseller: Mapped[Optional["Reseller"]] = relationship(
+        "Reseller", back_populates="licenses", foreign_keys=[reseller_id]
     )
 
     # Relations
@@ -367,4 +407,31 @@ class ActivationHistory(Base):
     # Relations
     license: Mapped["License"] = relationship(
         "License", back_populates="activation_history"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# License State Transitions — DB-enforced state machine
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LicenseStateTransition(Base):
+    """
+    İzin verilen lisans durum geçişleri referans tablosu.
+    DB trigger bu tabloyu sorgulayarak geçersiz geçişleri engeller.
+    """
+    __tablename__ = "license_state_transitions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    from_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    to_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    allowed_roles: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="admin"
+    )  # comma-separated: 'admin,reseller'
+    requires_reason: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("from_status", "to_status"),
     )

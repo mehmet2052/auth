@@ -66,6 +66,14 @@ class LicenseService:
         # Reseller'ın keys_created_count'unu arttır
         await self.admin_repo.increment_keys_count(admin_id, len(created))
         
+        # Webhook dispatch — key_created (non-blocking)
+        for lic_resp in created:
+            await self._dispatch_webhook("key_created", {
+                "key_partial": lic_resp.key[:8] + "...",
+                "license_type": lic_resp.license_type.value,
+                "created_by": str(admin_id),
+            })
+        
         logger.info(
             f"{len(created)} lisans oluşturuldu",
             extra={"admin_id": str(admin_id)}
@@ -108,6 +116,14 @@ class LicenseService:
             detail=f"Admin {admin_id} tarafından askıya alındı"
         )
         await self.db.commit()
+        
+        # Webhook dispatch — key_suspended
+        await self._dispatch_webhook("key_suspended", {
+            "key_partial": license_.key[:8] + "..." if license_.key else "unknown",
+            "reason": f"Admin {admin_id} tarafından askıya alındı",
+            "admin": str(admin_id),
+        })
+        
         return True
 
     async def revoke(self, license_id: uuid.UUID, admin_id: uuid.UUID) -> bool:
@@ -124,6 +140,14 @@ class LicenseService:
             detail=f"Admin {admin_id} tarafından iptal edildi"
         )
         await self.db.commit()
+        
+        # Webhook dispatch — key_banned
+        await self._dispatch_webhook("key_banned", {
+            "key_partial": license_.key[:8] + "..." if license_.key else "unknown",
+            "reason": f"Admin {admin_id} tarafından iptal edildi",
+            "admin": str(admin_id),
+        })
+        
         return True
 
     async def reset_hwid(
@@ -138,6 +162,11 @@ class LicenseService:
             return False
 
         await self.license_repo.reset_hwid(license_id)
+        # Increment hwid_reset_count and clear hwid tracking fields
+        license_.hwid_reset_count = (license_.hwid_reset_count or 0) + 1
+        license_.hwid_first_seen = None
+        license_.hwid_components_hash = None
+        await self.db.flush()
         await self.session_repo.invalidate_all_for_license(license_id)
         await self.log_repo.create(
             action=LogAction.HWID_RESET,
@@ -185,3 +214,18 @@ class LicenseService:
             page=page,
             page_size=page_size,
         )
+
+    async def _dispatch_webhook(
+        self,
+        event_type: str,
+        data: dict,
+    ) -> None:
+        """Non-blocking webhook dispatch stub. Wired to WebhookService in Task 3."""
+        try:
+            from app.services.webhook_service import WebhookService
+            import asyncio
+            asyncio.create_task(
+                WebhookService.dispatch_event_static(event_type, data)
+            )
+        except Exception:
+            pass
