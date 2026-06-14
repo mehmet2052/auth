@@ -95,20 +95,27 @@ async def create_tables() -> None:
             except Exception as e:
                 logger.warning(f"Migration SQL skipped (non-fatal): {sql[:60]}... — {e}")
 
-    # 2c. Normalize enum data to lowercase .value format
-    #     (handles data inserted by old create_all() which used UPPERCASE names)
+    # 2c. Normalize enum data: convert old enum NAMES to VALUES
     normalize_sqls = [
-        "UPDATE admins SET role = LOWER(role) WHERE role IS NOT NULL",
-        "UPDATE licenses SET status = LOWER(status) WHERE status IS NOT NULL",
-        "UPDATE licenses SET license_type = LOWER(license_type) WHERE license_type IS NOT NULL",
-        "UPDATE activity_logs SET action = LOWER(action) WHERE action IS NOT NULL",
+        # admins.role — name→value (ADMIN→admin, RESELLER→reseller)
+        "UPDATE admins SET role = LOWER(role) WHERE role IN ('ADMIN', 'RESELLER')",
+        # licenses.license_type — name→value
+        "UPDATE licenses SET license_type = '1d' WHERE license_type IN ('ONE_DAY', 'one_day')",
+        "UPDATE licenses SET license_type = '3d' WHERE license_type IN ('THREE_DAY', 'three_day')",
+        "UPDATE licenses SET license_type = '7d' WHERE license_type IN ('SEVEN_DAY', 'seven_day')",
+        "UPDATE licenses SET license_type = '30d' WHERE license_type IN ('THIRTY_DAY', 'thirty_day')",
+        "UPDATE licenses SET license_type = 'lifetime' WHERE license_type IN ('LIFETIME', 'lifetime')",
+        # licenses.status — name→value
+        "UPDATE licenses SET status = LOWER(status) WHERE status IN ('ACTIVE','USED','EXPIRED','SUSPENDED','REVOKED','BANNED')",
+        # activity_logs.action — name→value
+        "UPDATE activity_logs SET action = LOWER(action) WHERE action IN ('AUTH_SUCCESS','AUTH_FAILED','AUTH_EXPIRED','AUTH_SUSPENDED','HEARTBEAT_OK','HEARTBEAT_FAIL','HWID_MISMATCH','HWID_RESET','LICENSE_CREATED','LICENSE_REVOKED','ADMIN_LOGIN','ADMIN_LOGIN_FAIL','DISCORD_MISMATCH','ACTIVATION_LIMIT')",
     ]
     async with engine.begin() as conn:
         for sql in normalize_sqls:
             try:
                 await conn.execute(text(sql))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Normalize SQL skipped: {sql[:50]}... — {e}")
 
     # 3. Yeni tabloları oluştur (activation_history — create_all halleder ama garanti olsun)
     activation_history_sql = """

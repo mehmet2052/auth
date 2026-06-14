@@ -97,6 +97,17 @@ async function apiCall(method, path, body = null, isAdmin = true) {
         const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
+            // On 403 CSRF error, refetch token and retry once
+            if (res.status === 403 && data.detail && data.detail.includes("CSRF")) {
+                await fetchCsrfToken();
+                headers["X-CSRF-Token"] = csrfToken;
+                const retryOpts = { method, headers, signal: controller.signal };
+                if (body) retryOpts.body = JSON.stringify(body);
+                const retryRes = await fetch(`${API_BASE}${path}`, retryOpts);
+                const retryData = await retryRes.json().catch(() => ({}));
+                if (!retryRes.ok) throw new Error(retryData.detail || `HTTP ${retryRes.status}`);
+                return retryData;
+            }
             // On 401, attempt token refresh before logging out
             if (res.status === 401 && refreshToken && !path.includes("/refresh")) {
                 const refreshed = await doTokenRefresh();

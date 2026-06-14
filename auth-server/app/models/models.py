@@ -42,7 +42,11 @@ class StrEnum(TypeDecorator):
             try:
                 return self.enum_class(value)
             except ValueError:
-                return value  # Return raw string if enum lookup fails
+                # Fallback: try by name (handles old data stored as enum names)
+                try:
+                    return self.enum_class[value.upper()]
+                except (KeyError, AttributeError):
+                    return value  # Return raw string if nothing works
         return None
 
 

@@ -219,7 +219,7 @@ async def generate_csrf_token() -> str:
 async def validate_csrf_token(token: str) -> bool:
     """
     CSRF token doğrula — Redis'te mevcut mu ve süresi dolmamış mı?
-    Single-use: doğrulama sonrası silinir.
+    Reusable within TTL (1 hour) — not single-use.
     """
     from app.core.redis import get_redis
     if not token or len(token) != 64:
@@ -227,7 +227,4 @@ async def validate_csrf_token(token: str) -> bool:
     redis = await get_redis()
     key = f"{_CSRF_PREFIX}{token}"
     exists = await redis.exists(key)
-    if exists:
-        await redis.delete(key)
-        return True
-    return False
+    return bool(exists)
