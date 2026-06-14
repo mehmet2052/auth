@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     # App
     debug: bool = False
-    app_version: int = 1
+    app_version: str = "1.0.0"
     allowed_hosts: str = "*"
     cors_origins: str = "http://localhost:3000"
 

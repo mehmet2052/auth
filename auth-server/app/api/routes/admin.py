@@ -54,6 +54,7 @@ async def admin_login(
 )
 @limiter.limit("30/minute")
 async def create_licenses(
+    request: Request,
     body: LicenseCreateRequest,
     db: DBDep,
     admin: AdminDep,
@@ -70,6 +71,7 @@ async def create_licenses(
 )
 @limiter.limit("60/minute")
 async def list_licenses(
+    request: Request,
     db: DBDep,
     admin: AdminDep,
     page: int = Query(1, ge=1),
@@ -88,6 +90,7 @@ async def list_licenses(
 )
 @limiter.limit("30/minute")
 async def suspend_license(
+    request: Request,
     license_id: uuid.UUID,
     db: DBDep,
     admin: AdminDep,
@@ -106,6 +109,7 @@ async def suspend_license(
 )
 @limiter.limit("30/minute")
 async def revoke_license(
+    request: Request,
     license_id: uuid.UUID,
     db: DBDep,
     admin: AdminDep,
@@ -124,6 +128,7 @@ async def revoke_license(
 )
 @limiter.limit("30/minute")
 async def reset_hwid(
+    request: Request,
     body: HwidResetRequest,
     db: DBDep,
     admin: AdminDep,
@@ -146,6 +151,7 @@ async def reset_hwid(
 )
 @limiter.limit("60/minute")
 async def get_logs(
+    request: Request,
     db: DBDep,
     admin: AdminDep,
     page: int = Query(1, ge=1),

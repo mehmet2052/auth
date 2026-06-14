@@ -16,12 +16,7 @@ from app.models import models  # noqa — tüm modelleri yükle
 config = context.config
 
 # .env'den DATABASE_URL oku
-config.set_main_option(
-    "sqlalchemy.url",
-    os.environ.get("DATABASE_URL", "").replace(
-        "postgresql+asyncpg://", "postgresql://"
-    )
-)
+_database_url = os.environ.get("DATABASE_URL", "")
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -30,7 +25,10 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    # Offline modda sync driver kullan
+    url = _database_url.replace("postgresql+asyncpg://", "postgresql://")
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -48,6 +46,8 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
+    # Online async modda async driver gerekli
+    config.set_main_option("sqlalchemy.url", _database_url)
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

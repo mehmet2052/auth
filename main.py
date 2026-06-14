@@ -85,8 +85,9 @@ async def security_headers(request: Request, call_next):
 # ── Trusted Host Middleware ─────────────────────────────────────────────────
 
 if not settings.debug and settings.allowed_hosts != "*":
-    allowed = [h.strip() for h in settings.allowed_hosts.split(",")]
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed)
+    allowed = [h.strip() for h in settings.allowed_hosts.split(",") if h.strip()]
+    if allowed:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed)
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 
