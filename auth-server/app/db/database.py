@@ -59,18 +59,21 @@ async def create_tables() -> None:
     #    ADD COLUMN IF NOT EXISTS — PostgreSQL 9.6+ destekler
     migration_sqls = [
         # ── admins: RBAC kolonları ──
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'adminrole') THEN CREATE TYPE adminrole AS ENUM ('admin', 'reseller'); END IF; END $$",
-        "ALTER TABLE admins ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'admin'",
+        # adminrole enum — UPPERCASE to match SQLAlchemy's create_all()
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'adminrole') THEN CREATE TYPE adminrole AS ENUM ('ADMIN', 'RESELLER'); END IF; END $$",
+        "ALTER TABLE admins ADD COLUMN IF NOT EXISTS role adminrole NOT NULL DEFAULT 'ADMIN'",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES admins(id) ON DELETE SET NULL",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS key_quota_limit INTEGER",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS keys_created_count INTEGER NOT NULL DEFAULT 0",
+        # Ensure existing admins have role=ADMIN
+        "UPDATE admins SET role = 'ADMIN' WHERE role IS NULL",
         # ── licenses: hardening kolonları ──
         "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS discord_id VARCHAR(32)",
         "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS ip_fingerprint VARCHAR(64)",
         "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS activation_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS max_activations INTEGER NOT NULL DEFAULT 1",
-        # ── license_status enum'a 'banned' ekle ──
-        "DO $$ BEGIN ALTER TYPE licensestatus ADD VALUE 'banned'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
+        # ── licensestatus enum'a 'BANNED' ekle ──
+        "DO $$ BEGIN ALTER TYPE licensestatus ADD VALUE 'BANNED'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
     ]
     async with engine.begin() as conn:
         for sql in migration_sqls:

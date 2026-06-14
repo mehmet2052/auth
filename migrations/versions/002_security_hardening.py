@@ -21,15 +21,15 @@ depends_on = None
 
 def upgrade() -> None:
     # ── admins: RBAC columns ─────────────────────────────────────────────────
-    # Create admin_role enum type
-    admin_role_enum = sa.Enum('admin', 'reseller', name='adminrole')
+    # Create admin_role enum type — UPPERCASE to match SQLAlchemy
+    admin_role_enum = sa.Enum('ADMIN', 'RESELLER', name='adminrole')
     admin_role_enum.create(op.get_bind(), checkfirst=True)
 
     op.add_column('admins', sa.Column(
         'role',
-        sa.Enum('admin', 'reseller', name='adminrole'),
+        sa.Enum('ADMIN', 'RESELLER', name='adminrole'),
         nullable=False,
-        server_default='admin',
+        server_default='ADMIN',
     ))
     op.add_column('admins', sa.Column(
         'parent_id', UUID(as_uuid=True),
@@ -43,8 +43,8 @@ def upgrade() -> None:
         'keys_created_count', sa.Integer(), nullable=False, server_default='0',
     ))
 
-    # Set all existing admins to role=admin
-    op.execute("UPDATE admins SET role = 'admin'")
+    # Set all existing admins to role=ADMIN
+    op.execute("UPDATE admins SET role = 'ADMIN'")
 
     op.create_index('ix_admins_role', 'admins', ['role'])
     op.create_index('ix_admins_parent_id', 'admins', ['parent_id'])
@@ -69,7 +69,7 @@ def upgrade() -> None:
     # For string-based status, no migration needed — just ensure the value is valid
     # Try to add to enum; if it's a string column, this is a no-op
     try:
-        op.execute("ALTER TYPE licensestatus ADD VALUE IF NOT EXISTS 'banned'")
+        op.execute("ALTER TYPE licensestatus ADD VALUE IF NOT EXISTS 'BANNED'")
     except Exception:
         pass  # String-based status column — no enum to alter
 
