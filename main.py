@@ -18,7 +18,7 @@ from app.core.redis import close_redis
 from app.db.database import create_tables, AsyncSessionLocal
 from app.middleware.rate_limiter import RateLimitMiddleware
 from app.api.routes import auth, admin, csrf
-from app.models.models import Admin
+from app.models.models import Admin, AdminRole
 
 settings = get_settings()
 
@@ -26,17 +26,49 @@ settings = get_settings()
 async def _ensure_admin() -> None:
     """Başlangıçta admin yoksa .env'den otomatik oluştur."""
     async with AsyncSessionLocal() as db:
-        from sqlalchemy import select
-        result = await db.execute(select(Admin).where(Admin.username == settings.admin_username))
-        if result.scalar_one_or_none():
+        from sqlalchemy import select, text as sql_text
+
+        # Safety: fix any invalid role values in the database before querying
+        try:
+            await db.execute(
+                sql_text("UPDATE admins SET role = 'admin' WHERE role NOT IN ('admin', 'reseller')")
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+
+        try:
+            result = await db.execute(
+                select(Admin).where(Admin.username == settings.admin_username)
+            )
+            existing = result.scalar_one_or_none()
+        except Exception as e:
+            # Enum lookup failure — force-fix via raw SQL and retry
+            logger.warning(f"Admin sorgu hatası, düzeltme deneniyor: {e}")
+            try:
+                await db.execute(
+                    sql_text("UPDATE admins SET role = 'admin' WHERE role IS NOT NULL")
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+            # Retry query after fix
+            result = await db.execute(
+                select(Admin).where(Admin.username == settings.admin_username)
+            )
+            existing = result.scalar_one_or_none()
+
+        if existing:
             logger.info(f"Admin '{settings.admin_username}' zaten mevcut")
             return
-        admin = Admin(
+
+        new_admin = Admin(
             username=settings.admin_username,
             password_hash=hash_password(settings.admin_password),
+            role=AdminRole.ADMIN,
             is_active=True,
         )
-        db.add(admin)
+        db.add(new_admin)
         await db.commit()
         logger.info(f"Admin '{settings.admin_username}' otomatik oluşturuldu")
 

@@ -17,6 +17,10 @@ from sqlalchemy.sql import func
 
 from app.db.database import Base
 
+# SQLAlchemy Enum helper: store enum .value in DB, not .name
+# This avoids PostgreSQL enum type name/value mismatches entirely
+_ev = lambda e: [m.value for m in e]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Enum Tipleri
@@ -89,7 +93,8 @@ class Admin(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     role: Mapped[AdminRole] = mapped_column(
-        Enum(AdminRole), default=AdminRole.ADMIN, nullable=False
+        Enum(AdminRole, values_callable=_ev, create_type=False),
+        default=AdminRole.ADMIN, nullable=False
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -137,10 +142,11 @@ class License(Base):
         String(64), unique=True, nullable=False, index=True
     )
     license_type: Mapped[LicenseType] = mapped_column(
-        Enum(LicenseType), nullable=False
+        Enum(LicenseType, values_callable=_ev, create_type=False), nullable=False
     )
     status: Mapped[LicenseStatus] = mapped_column(
-        Enum(LicenseStatus), default=LicenseStatus.ACTIVE, nullable=False
+        Enum(LicenseStatus, values_callable=_ev, create_type=False),
+        default=LicenseStatus.ACTIVE, nullable=False
     )
 
     # Zamanlama — sunucu saatine göre
@@ -258,7 +264,9 @@ class ActivityLog(Base):
         UUID(as_uuid=True),
         ForeignKey("licenses.id", ondelete="SET NULL")
     )
-    action: Mapped[LogAction] = mapped_column(Enum(LogAction), nullable=False)
+    action: Mapped[LogAction] = mapped_column(
+        Enum(LogAction, values_callable=_ev, create_type=False), nullable=False
+    )
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))
     hwid_hash: Mapped[Optional[str]] = mapped_column(String(64))
     detail: Mapped[Optional[str]] = mapped_column(Text)
@@ -319,7 +327,7 @@ class ActivationHistory(Base):
         nullable=False
     )
     action: Mapped[ActivationAction] = mapped_column(
-        Enum(ActivationAction), nullable=False
+        Enum(ActivationAction, values_callable=_ev, create_type=False), nullable=False
     )
     hwid_hash: Mapped[Optional[str]] = mapped_column(String(64))
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))

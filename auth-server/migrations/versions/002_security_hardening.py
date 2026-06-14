@@ -21,15 +21,12 @@ depends_on = None
 
 def upgrade() -> None:
     # ── admins: RBAC columns ─────────────────────────────────────────────────
-    # Create admin_role enum type — UPPERCASE to match SQLAlchemy
-    admin_role_enum = sa.Enum('ADMIN', 'RESELLER', name='adminrole')
-    admin_role_enum.create(op.get_bind(), checkfirst=True)
-
+    # Use VARCHAR for role (not PostgreSQL enum) — avoids name/value mismatch
     op.add_column('admins', sa.Column(
         'role',
-        sa.Enum('ADMIN', 'RESELLER', name='adminrole'),
+        sa.String(32),
         nullable=False,
-        server_default='ADMIN',
+        server_default='admin',
     ))
     op.add_column('admins', sa.Column(
         'parent_id', UUID(as_uuid=True),
@@ -43,8 +40,8 @@ def upgrade() -> None:
         'keys_created_count', sa.Integer(), nullable=False, server_default='0',
     ))
 
-    # Set all existing admins to role=ADMIN
-    op.execute("UPDATE admins SET role = 'ADMIN'")
+    # Set all existing admins to role=admin
+    op.execute("UPDATE admins SET role = 'admin'")
 
     op.create_index('ix_admins_role', 'admins', ['role'])
     op.create_index('ix_admins_parent_id', 'admins', ['parent_id'])
@@ -65,13 +62,9 @@ def upgrade() -> None:
 
     op.create_index('ix_licenses_discord_id', 'licenses', ['discord_id'])
 
-    # Add 'banned' to license_status enum (if using PostgreSQL enum type)
-    # For string-based status, no migration needed — just ensure the value is valid
-    # Try to add to enum; if it's a string column, this is a no-op
-    try:
-        op.execute("ALTER TYPE licensestatus ADD VALUE IF NOT EXISTS 'BANNED'")
-    except Exception:
-        pass  # String-based status column — no enum to alter
+    # Ensure 'banned' is a valid status value (Varchar column — no enum to alter)
+    # No migration needed for VARCHAR-based status columns
+    pass
 
     # ── activation_history: new table ────────────────────────────────────────
     op.create_table(
@@ -114,6 +107,19 @@ def downgrade() -> None:
 
     # Drop enum type
     op.execute("DROP TYPE IF EXISTS adminrole")
+
+    # Convert any remaining PostgreSQL enum columns back to VARCHAR
+    for table_col in [
+        ('licenses', 'license_type'),
+        ('licenses', 'status'),
+        ('activity_logs', 'action'),
+    ]:
+        try:
+            op.execute(
+                f"ALTER TABLE {table_col[0]} ALTER COLUMN {table_col[1]} TYPE VARCHAR(64)"
+            )
+        except Exception:
+            pass
 
     # Note: Cannot remove 'banned' from PostgreSQL enum — requires recreating the type
     # This is intentionally left as-is for safety

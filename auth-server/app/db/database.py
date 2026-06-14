@@ -55,11 +55,9 @@ async def create_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # 2. Auto-migration: mevcut tablolara eksik kolonları ekle
+    # 2. Auto-migration: add missing columns to existing tables
     migration_sqls = [
-        # ── admins: RBAC kolonları ──
-        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'adminrole') THEN CREATE TYPE adminrole AS ENUM ('ADMIN', 'RESELLER'); END IF; END $$",
-        "ALTER TABLE admins ADD COLUMN IF NOT EXISTS role adminrole NOT NULL DEFAULT 'ADMIN'",
+        # ── admins: RBAC columns ──
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES admins(id) ON DELETE SET NULL",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS key_quota_limit INTEGER",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS keys_created_count INTEGER NOT NULL DEFAULT 0",
@@ -71,31 +69,42 @@ async def create_tables() -> None:
             except Exception:
                 pass
 
-    # 2b. Fix role column — convert from VARCHAR to adminrole enum if needed
-    #     (handles case where previous deploy created it as VARCHAR with lowercase values)
-    role_fix_sqls = [
-        "UPDATE admins SET role = UPPER(role::text)",
-        "ALTER TABLE admins ALTER COLUMN role TYPE adminrole USING role::text::adminrole",
-        "ALTER TABLE admins ALTER COLUMN role SET DEFAULT 'ADMIN'",
-        "UPDATE admins SET role = 'ADMIN' WHERE role IS NULL",
-    ]
-    async with engine.begin() as conn:
-        for sql in role_fix_sqls:
-            try:
-                await conn.execute(text(sql))
-            except Exception:
-                pass
-
-    # 2c. Licenses hardening columns
-    license_sqls = [
+    # 2b. Convert ALL enum columns to VARCHAR — avoids PostgreSQL enum name mismatch
+    #     (SQLAlchemy Enum stores .name by default, but we use values_callable to store .value)
+    varchar_fix_sqls = [
+        # admins.role → VARCHAR
+        "ALTER TABLE admins ALTER COLUMN role TYPE VARCHAR(32) USING role::text",
+        "ALTER TABLE admins ALTER COLUMN role SET DEFAULT 'admin'",
+        # licenses → VARCHAR
+        "ALTER TABLE licenses ALTER COLUMN license_type TYPE VARCHAR(32) USING license_type::text",
+        "ALTER TABLE licenses ALTER COLUMN status TYPE VARCHAR(32) USING status::text",
+        # activity_logs → VARCHAR
+        "ALTER TABLE activity_logs ALTER COLUMN action TYPE VARCHAR(64) USING action::text",
+        # activation_history → VARCHAR
+        "ALTER TABLE activation_history ALTER COLUMN action TYPE VARCHAR(64) USING action::text",
+        # Licenses hardening columns
         "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS discord_id VARCHAR(32)",
         "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS ip_fingerprint VARCHAR(64)",
         "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS activation_count INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS max_activations INTEGER NOT NULL DEFAULT 1",
-        "DO $$ BEGIN ALTER TYPE licensestatus ADD VALUE 'BANNED'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
     ]
     async with engine.begin() as conn:
-        for sql in license_sqls:
+        for sql in varchar_fix_sqls:
+            try:
+                await conn.execute(text(sql))
+            except Exception:
+                pass  # Column may not exist yet or already correct type
+
+    # 2c. Normalize enum data to lowercase .value format
+    #     (handles data inserted by old create_all() which used UPPERCASE names)
+    normalize_sqls = [
+        "UPDATE admins SET role = LOWER(role) WHERE role IS NOT NULL",
+        "UPDATE licenses SET status = LOWER(status) WHERE status IS NOT NULL",
+        "UPDATE licenses SET license_type = LOWER(license_type) WHERE license_type IS NOT NULL",
+        "UPDATE activity_logs SET action = LOWER(action) WHERE action IS NOT NULL",
+    ]
+    async with engine.begin() as conn:
+        for sql in normalize_sqls:
             try:
                 await conn.execute(text(sql))
             except Exception:
