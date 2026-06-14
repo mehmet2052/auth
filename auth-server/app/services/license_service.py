@@ -7,12 +7,16 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import generate_license_key
-from app.models.models import LicenseType, LicenseStatus, LogAction
-from app.repositories.license_repo import LicenseRepository, ActivityLogRepository
+from app.models.models import LicenseType, LicenseStatus, LogAction, ActivationAction
+from app.repositories.license_repo import (
+    LicenseRepository, ActivityLogRepository, ActivationHistoryRepository,
+)
 from app.repositories.session_repo import SessionRepository
+from app.repositories.admin_repo import AdminRepository
 from app.schemas.schemas import (
     LicenseCreateRequest, LicenseResponse,
     LicenseListResponse, ActivityLogListResponse,
+    ActivationHistoryListResponse, ActivationHistoryResponse,
 )
 from app.core.logging import logger
 
@@ -25,6 +29,8 @@ class LicenseService:
         self.license_repo = LicenseRepository(db)
         self.log_repo     = ActivityLogRepository(db)
         self.session_repo = SessionRepository(db)
+        self.admin_repo   = AdminRepository(db)
+        self.activation_repo = ActivationHistoryRepository(db)
 
     async def create_licenses(
         self,
@@ -56,6 +62,10 @@ class LicenseService:
             created.append(LicenseResponse.model_validate(license_))
 
         await self.db.commit()
+        
+        # Reseller'ın keys_created_count'unu arttır
+        await self.admin_repo.increment_keys_count(admin_id, len(created))
+        
         logger.info(
             f"{len(created)} lisans oluşturuldu",
             extra={"admin_id": str(admin_id)}
@@ -67,12 +77,14 @@ class LicenseService:
         page: int = 1,
         page_size: int = 20,
         status_filter: Optional[LicenseStatus] = None,
+        created_by_filter: Optional[uuid.UUID] = None,
     ) -> LicenseListResponse:
         """Sayfalanmış lisans listesi."""
         items, total = await self.license_repo.list_all(
             page=page,
             page_size=page_size,
             status_filter=status_filter,
+            created_by_filter=created_by_filter,
         )
         return LicenseListResponse(
             items=[LicenseResponse.model_validate(i) for i in items],
@@ -150,6 +162,25 @@ class LicenseService:
         )
         return ActivityLogListResponse(
             items=[ActivityLogResponse.model_validate(i) for i in items],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+
+    async def get_activation_history(
+        self,
+        license_id: uuid.UUID,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> ActivationHistoryListResponse:
+        """Lisansın aktivasyon geçmişi."""
+        items, total = await self.activation_repo.list_by_license(
+            license_id=license_id,
+            page=page,
+            page_size=page_size,
+        )
+        return ActivationHistoryListResponse(
+            items=[ActivationHistoryResponse.model_validate(i) for i in items],
             total=total,
             page=page,
             page_size=page_size,

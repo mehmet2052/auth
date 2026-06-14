@@ -8,7 +8,7 @@ from typing import Optional
 from pydantic import BaseModel, Field, field_validator
 import re
 
-from app.models.models import LicenseType, LicenseStatus, LogAction
+from app.models.models import LicenseType, LicenseStatus, LogAction, AdminRole, ActivationAction
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -31,6 +31,12 @@ class AuthRequest(BaseModel):
         min_length=8,
         max_length=256,
         description="Ham HWID verisi (sunucuda hashlenecek)"
+    )
+    discord_id: str = Field(
+        ...,
+        min_length=17,
+        max_length=20,
+        description="Discord ID (snowflake, zorunlu)"
     )
     nonce: str = Field(
         ...,
@@ -64,6 +70,14 @@ class AuthRequest(BaseModel):
         if not re.match(r'^[a-f0-9]+$', v):
             raise ValueError("Geçersiz nonce formatı")
         return v
+
+    @field_validator("discord_id")
+    @classmethod
+    def validate_discord_id(cls, v: str) -> str:
+        """Discord snowflake ID kontrolü."""
+        if not re.match(r'^[0-9]{17,20}$', v):
+            raise ValueError("Geçersiz Discord ID")
+        return v.strip()
 
 
 class AuthResponse(BaseModel):
@@ -124,8 +138,63 @@ class AdminLoginRequest(BaseModel):
 class AdminLoginResponse(BaseModel):
     """Admin giriş yanıtı."""
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     expires_at: datetime
+    role: AdminRole
+
+
+class TokenRefreshRequest(BaseModel):
+    """Token yenileme isteği."""
+    refresh_token: str = Field(..., min_length=10)
+
+
+class TokenRefreshResponse(BaseModel):
+    """Token yenileme yanıtı."""
+    access_token: str
+    refresh_token: str
+    expires_at: datetime
+
+
+class ResellerCreateRequest(BaseModel):
+    """Reseller oluşturulması isteği (admin-only)."""
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=8, max_length=256)
+    key_quota_limit: Optional[int] = Field(None, ge=1, description="Max key sayısı (NULL=sınırsız)")
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9_\-\.]+$', v):
+            raise ValueError("Geçersiz kullanıcı adı")
+        return v.strip()
+
+
+class AdminCreateRequest(BaseModel):
+    """Yeni admin oluşturulması isteği (admin-only)."""
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=8, max_length=256)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9_\-\.]+$', v):
+            raise ValueError("Geçersiz kullanıcı adı")
+        return v.strip()
+
+
+class AdminResponse(BaseModel):
+    """Admin/reseller yanıtı."""
+    id: uuid.UUID
+    username: str
+    role: AdminRole
+    is_active: bool
+    created_at: datetime
+    last_login: Optional[datetime]
+    key_quota_limit: Optional[int]
+    keys_created_count: int
+
+    model_config = {"from_attributes": True}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -137,6 +206,16 @@ class LicenseCreateRequest(BaseModel):
     license_type: LicenseType
     note: Optional[str] = Field(None, max_length=500)
     count: int = Field(1, ge=1, le=100, description="Kaç adet oluşturulsun")
+    discord_id: Optional[str] = Field(None, description="Pre-bind Discord ID (opsiyonel)")
+
+    @field_validator("discord_id")
+    @classmethod
+    def validate_discord_id(cls, v):
+        if v is None:
+            return v
+        if not re.match(r'^[0-9]{17,20}$', v):
+            raise ValueError("Geçersiz Discord ID")
+        return v.strip()
 
 
 class LicenseResponse(BaseModel):
@@ -148,6 +227,9 @@ class LicenseResponse(BaseModel):
     created_at: datetime
     activated_at: Optional[datetime]
     expires_at: Optional[datetime]
+    discord_id: Optional[str]
+    activation_count: int
+    max_activations: int
     note: Optional[str]
 
     model_config = {"from_attributes": True}
@@ -186,6 +268,27 @@ class ActivityLogResponse(BaseModel):
 class ActivityLogListResponse(BaseModel):
     """Log listesi yanıtı."""
     items: list[ActivityLogResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class ActivationHistoryResponse(BaseModel):
+    """Aktivasyon geçmişi yanıtı."""
+    id: uuid.UUID
+    license_id: uuid.UUID
+    action: ActivationAction
+    hwid_hash: Optional[str]
+    ip_address: Optional[str]
+    discord_id: Optional[str]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ActivationHistoryListResponse(BaseModel):
+    """Aktivasyon geçmişi listesi."""
+    items: list[ActivationHistoryResponse]
     total: int
     page: int
     page_size: int

@@ -17,8 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.security import hash_hwid, create_access_token
-from app.models.models import LicenseType, LicenseStatus, LogAction
-from app.repositories.license_repo import LicenseRepository, ActivityLogRepository
+from app.models.models import LicenseType, LicenseStatus, LogAction, ActivationAction
+from app.repositories.license_repo import (
+    LicenseRepository, ActivityLogRepository, ActivationHistoryRepository,
+)
 from app.repositories.session_repo import SessionRepository, NonceRepository
 from app.schemas.schemas import AuthRequest, AuthResponse, HeartbeatRequest, HeartbeatResponse
 from app.core.logging import logger
@@ -49,6 +51,7 @@ class AuthService:
         self.session_repo   = SessionRepository(db)
         self.nonce_repo     = NonceRepository(db)
         self.log_repo       = ActivityLogRepository(db)
+        self.activation_repo = ActivationHistoryRepository(db)
 
     async def authenticate(
         self,
@@ -86,6 +89,11 @@ class AuthService:
                             detail="İptal edilmiş lisans")
             raise ValueError("Bu lisans iptal edilmiş")
 
+        if license_.status == LicenseStatus.BANNED:
+            await self._log(LogAction.AUTH_FAILED, license_.id, ip_address,
+                            detail="Yasaklanmış lisans")
+            raise ValueError("Bu lisans yasaklanmış")
+
         if license_.status == LicenseStatus.EXPIRED:
             await self._log(LogAction.AUTH_EXPIRED, license_.id, ip_address,
                             detail="Süresi dolmuş lisans")
@@ -106,10 +114,29 @@ class AuthService:
 
         if license_.status == LicenseStatus.ACTIVE and not license_.hwid_hash:
             # İlk aktivasyon — HWID bağla
+            
+            # Aktivasyon limiti kontrolü
+            if license_.activation_count >= license_.max_activations:
+                await self._log(
+                    LogAction.ACTIVATION_LIMIT, license_.id, ip_address,
+                    detail=f"Aktivasyon limiti aşıldı ({license_.max_activations})"
+                )
+                raise ValueError("Bu lisans için aktivasyon limiti dolmuş")
+            
             expires_at = _calculate_expiry(license_.license_type)
             license_ = await self.license_repo.activate(
                 license_, hwid_hash, expires_at
             )
+            
+            # Aktivasyon geçmişi kaydı
+            await self.activation_repo.create(
+                license_id=license_.id,
+                action=ActivationAction.ACTIVATED,
+                hwid_hash=hwid_hash,
+                ip_address=ip_address,
+                discord_id=request.discord_id,
+            )
+            
             logger.info(
                 "Lisans ilk kez aktive edildi",
                 extra={"license_id": str(license_.id), "ip": ip_address}
@@ -122,6 +149,34 @@ class AuthService:
                 detail="HWID eşleşmedi"
             )
             raise ValueError("Bu lisans farklı bir donanıma bağlı")
+
+        # ── 4.5 Discord ID bağlama ─────────────────────────────────────────
+        if not license_.discord_id:
+            # İlk aktivasyonda Discord ID bağla
+            await self.license_repo.bind_discord_id(license_.id, request.discord_id)
+            logger.info(
+                "Discord ID bağlandı",
+                extra={"license_id": str(license_.id), "discord_id": request.discord_id}
+            )
+        elif license_.discord_id != request.discord_id:
+            # Discord ID uyuşmuyor
+            await self._log(
+                LogAction.DISCORD_MISMATCH, license_.id, ip_address,
+                detail=f"Discord ID eşleşmedi (beklenen: {license_.discord_id}, gelen: {request.discord_id})"
+            )
+            raise ValueError("Bu lisans farklı bir Discord hesabına bağlı")
+
+        # ── 4.6 IP fingerprint (soft binding) ─────────────────────────────
+        if ip_address:
+            ip_hash = hash_hwid(ip_address)  # Reuse hash function for IP
+            if not license_.ip_fingerprint:
+                await self.license_repo.update_ip_fingerprint(license_.id, ip_hash)
+            elif license_.ip_fingerprint != ip_hash:
+                # Sadece log — engellemez
+                await self._log(
+                    LogAction.AUTH_SUCCESS, license_.id, ip_address,
+                    detail="IP değişikliği tespit edildi (soft binding)"
+                )
 
         # ── 5. Mevcut session'ları invalidate et (tek cihaz politikası)
         await self.session_repo.invalidate_all_for_license(license_.id)

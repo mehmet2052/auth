@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>Nexus Auth Panel</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -95,13 +97,13 @@ tr:hover td{background:#160f2a}
     <p>Auth Management Panel</p>
     <div class="form-group">
       <label>Kullanıcı Adı</label>
-      <input type="text" id="login-user" placeholder="admin" autocomplete="username">
+      <input type="text" id="login-user" placeholder="admin" autocomplete="off">
     </div>
     <div class="form-group">
       <label>Şifre</label>
-      <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password">
+      <input type="password" id="login-pass" placeholder="••••••••" autocomplete="off">
     </div>
-    <button class="btn btn-primary" onclick="doLogin()">Giriş Yap</button>
+    <button class="btn btn-primary" id="btn-login">Giriş Yap</button>
     <div class="error-msg hidden" id="login-error"></div>
   </div>
 </div>
@@ -112,13 +114,13 @@ tr:hover td{background:#160f2a}
     <div class="logo">⬡ NEXUS AUTH</div>
     <div style="display:flex;align-items:center;gap:16px">
       <span class="user" id="admin-name"></span>
-      <button class="logout" onclick="doLogout()">Çıkış</button>
+      <button class="logout" id="btn-logout">Çıkış</button>
     </div>
   </div>
   <div class="layout">
     <div class="sidebar">
-      <a href="#" class="active" onclick="showPage('licenses',this)">Lisanslar</a>
-      <a href="#" onclick="showPage('logs',this)">Aktivite Logları</a>
+      <a href="#" class="active" data-page="licenses">Lisanslar</a>
+      <a href="#" data-page="logs">Aktivite Logları</a>
     </div>
     <div class="main">
 
@@ -127,8 +129,8 @@ tr:hover td{background:#160f2a}
         <div class="page-title">Lisans Yönetimi</div>
         <div class="stats" id="stats-grid"></div>
         <div class="controls">
-          <button class="btn btn-primary" style="width:auto;padding:8px 18px" onclick="openCreateModal()">+ Lisans Oluştur</button>
-          <select id="filter-status" onchange="loadLicenses(1)">
+          <button class="btn btn-primary" style="width:auto;padding:8px 18px" id="btn-create-open">+ Lisans Oluştur</button>
+          <select id="filter-status">
             <option value="">Tüm Durumlar</option>
             <option value="active">Aktif</option>
             <option value="used">Kullanımda</option>
@@ -193,8 +195,8 @@ tr:hover td{background:#160f2a}
       <input type="text" id="lic-note" placeholder="Müşteri adı vb." style="width:100%">
     </div>
     <div class="actions">
-      <button class="btn btn-primary" style="width:auto;padding:9px 20px" onclick="doCreateLicense()">Oluştur</button>
-      <button class="btn" style="width:auto;padding:9px 20px;background:#1a1530;border:1px solid #3a2060" onclick="closeModal('create-modal')">İptal</button>
+      <button class="btn btn-primary" style="width:auto;padding:9px 20px" id="btn-create-submit">Oluştur</button>
+      <button class="btn" style="width:auto;padding:9px 20px;background:#1a1530;border:1px solid #3a2060" data-close="create-modal">İptal</button>
     </div>
     <div id="create-result" style="margin-top:14px;font-size:12px;color:#4caf50;word-break:break-all"></div>
   </div>
@@ -211,12 +213,12 @@ tr:hover td{background:#160f2a}
     </div>
     <input type="hidden" id="hwid-license-id">
     <div class="actions">
-      <button class="btn btn-primary" style="width:auto;padding:9px 20px;background:#e67e22" onclick="doHwidReset()">Sıfırla</button>
-      <button class="btn" style="width:auto;padding:9px 20px;background:#1a1530;border:1px solid #3a2060" onclick="closeModal('hwid-modal')">İptal</button>
+      <button class="btn btn-primary" style="width:auto;padding:9px 20px;background:#e67e22" id="btn-hwid-reset">Sıfırla</button>
+      <button class="btn" style="width:auto;padding:9px 20px;background:#1a1530;border:1px solid #3a2060" data-close="hwid-modal">İptal</button>
     </div>
   </div>
 </div>
 
-<script src="js/panel.js"></script>
+<script src="js/panel.js" nonce="{{CSP_NONCE}}"></script>
 </body>
 </html>

@@ -6,16 +6,14 @@ Client auth endpoint'leri.
 from fastapi import APIRouter, Request, HTTPException, status
 
 from app.api.deps import DBDep, ApiSecret
-from app.middleware.rate_limiter import limiter
+from app.middleware.rate_limiter import check_auth_rate_limit, check_heartbeat_rate_limit
 from app.services.auth_service import AuthService
 from app.schemas.schemas import (
     AuthRequest, AuthResponse,
     HeartbeatRequest, HeartbeatResponse,
     ErrorResponse,
 )
-from app.core.config import get_settings
 
-settings = get_settings()
 router = APIRouter(prefix="/api/v1", tags=["Client Auth"])
 
 
@@ -30,7 +28,6 @@ router = APIRouter(prefix="/api/v1", tags=["Client Auth"])
     summary="Lisans doğrulama",
     description="İstemci başlatma sırasında lisans anahtarını doğrular ve session token alır.",
 )
-@limiter.limit(settings.rate_limit_auth)
 async def authenticate(
     request: Request,
     body: AuthRequest,
@@ -41,12 +38,13 @@ async def authenticate(
     Lisans doğrulama endpoint'i.
     
     Güvenlik katmanları:
-    - Rate limiting (IP bazlı)
+    - Rate limiting (IP bazlı, Redis-backed)
     - API secret header kontrolü
     - Nonce replay attack koruması
     - HWID doğrulama
     - Sunucu saati bazlı süre kontrolü
     """
+    await check_auth_rate_limit(request)
     ip = request.client.host if request.client else None
     service = AuthService(db)
 
@@ -68,7 +66,6 @@ async def authenticate(
     summary="Oturum yenileme",
     description="Her 5 dakikada bir çağrılarak session'ın geçerliliği kontrol edilir.",
 )
-@limiter.limit(settings.rate_limit_heartbeat)
 async def heartbeat(
     request: Request,
     body: HeartbeatRequest,
@@ -79,6 +76,7 @@ async def heartbeat(
     Heartbeat endpoint'i.
     Sunucu istediği zaman session'ı iptal edebilir — anında etki.
     """
+    await check_heartbeat_rate_limit(request)
     ip = request.client.host if request.client else None
     service = AuthService(db)
 

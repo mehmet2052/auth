@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.security import decode_access_token
 from app.db.database import get_db
 from app.repositories.admin_repo import AdminRepository
+from app.models.models import AdminRole
 
 settings = get_settings()
 
@@ -52,8 +53,14 @@ async def get_current_admin(
         payload = decode_access_token(credentials.credentials)
         admin_id_str: str = payload.get("sub")
         token_type: str = payload.get("type")
+        jti: str = payload.get("jti")
 
-        if not admin_id_str or token_type != "admin":
+        if not admin_id_str or token_type != "access":
+            raise credentials_exception
+
+        # Token blacklist kontrolü (Redis)
+        from app.core.token_store import is_token_revoked
+        if await is_token_revoked(jti):
             raise credentials_exception
 
         admin_id = uuid.UUID(admin_id_str)
@@ -66,9 +73,32 @@ async def get_current_admin(
     if not admin or not admin.is_active:
         raise credentials_exception
 
-    return {"id": admin.id, "username": admin.username}
+    return {
+        "id": admin.id,
+        "username": admin.username,
+        "role": admin.role,
+        "key_quota_limit": admin.key_quota_limit,
+        "keys_created_count": admin.keys_created_count,
+    }
 
 
-DBDep     = Annotated[AsyncSession, Depends(get_db)]
-AdminDep  = Annotated[dict, Depends(get_current_admin)]
-ApiSecret = Annotated[None, Depends(verify_api_secret)]
+def require_role(*roles: AdminRole):
+    """
+    Role-based access control dependency factory.
+    Belirli rolleri gerektiren endpoint'ler için kullanılır.
+    """
+    async def role_checker(admin: Annotated[dict, Depends(get_current_admin)]) -> dict:
+        if admin["role"] not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bu işlem için yetkiniz yok"
+            )
+        return admin
+    return role_checker
+
+
+DBDep            = Annotated[AsyncSession, Depends(get_db)]
+AdminDep         = Annotated[dict, Depends(get_current_admin)]
+AdminOnly        = Annotated[dict, Depends(require_role(AdminRole.ADMIN))]
+ResellerOrAdmin  = Annotated[dict, Depends(require_role(AdminRole.ADMIN, AdminRole.RESELLER))]
+ApiSecret        = Annotated[None, Depends(verify_api_secret)]

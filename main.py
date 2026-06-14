@@ -6,17 +6,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import SlowAPIMiddleware
+from pathlib import Path
+import secrets as _secrets
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging, logger
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_csrf_token
+from app.core.redis import close_redis
 from app.db.database import create_tables, AsyncSessionLocal
-from app.middleware.rate_limiter import limiter, rate_limit_exceeded_handler
-from app.api.routes import auth, admin
+from app.middleware.rate_limiter import RateLimitMiddleware
+from app.api.routes import auth, admin, csrf
 from app.models.models import Admin
 
 settings = get_settings()
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Nexus Auth Server hazır. Debug={settings.debug}")
     yield
     logger.info("Nexus Auth Server kapatılıyor...")
+    await close_redis()
 
 
 app = FastAPI(
@@ -68,16 +70,68 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.debug else None,
 )
 
+# ── CSRF Exempt Paths ───────────────────────────────────────────────────────
+
+_CSRF_EXEMPT_PREFIXES = (
+    "/api/v1/auth",
+    "/api/v1/heartbeat",
+    "/api/v1/csrf-token",
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+)
+
+
+@app.middleware("http")
+async def csrf_protection(request: Request, call_next):
+    """CSRF protection for state-changing requests from browser clients."""
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        path = request.url.path
+        is_exempt = any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES)
+        
+        if not is_exempt:
+            csrf_token = request.headers.get("X-CSRF-Token", "")
+            if not csrf_token:
+                csrf_token = request.cookies.get("csrf_token", "")
+            
+            if not csrf_token:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "CSRF token eksik"}
+                )
+            
+            valid = await validate_csrf_token(csrf_token)
+            if not valid:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "CSRF token geçersiz veya süresi dolmuş"}
+                )
+    
+    return await call_next(request)
+
+
 # ── Security Headers Middleware ─────────────────────────────────────────────
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    nonce = _secrets.token_hex(16)
+    request.state.csp_nonce = nonce
+    
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    # Nonce-based CSP — no unsafe-inline for scripts
+    response.headers["Content-Security-Policy"] = (
+        f"default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        f"style-src 'self' 'unsafe-inline'; "
+        f"img-src 'self' data:; "
+        f"font-src 'self'; "
+        f"connect-src 'self'"
+    )
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     return response
@@ -100,18 +154,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rate Limiter
-app.state.limiter = limiter
-app.add_middleware(SlowAPIMiddleware)
-app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+# Rate Limiter (Redis-backed)
+app.add_middleware(RateLimitMiddleware, global_limit=100, window_seconds=60)
 
 # ── Router'lar ────────────────────────────────────────────────────────────────
 
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(csrf.router)
 
-# Admin paneli — /panel/
-app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
+# Admin paneli — serve HTML with nonce injection, static assets separately
+_PANEL_DIR = Path(__file__).parent / "panel"
+
+@app.get("/panel/", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/panel", response_class=HTMLResponse, include_in_schema=False)
+async def serve_panel(request: Request):
+    """Serve panel HTML with CSP nonce injection."""
+    html_path = _PANEL_DIR / "index.html"
+    content = html_path.read_text(encoding="utf-8")
+    nonce = request.state.csp_nonce
+    content = content.replace("{{CSP_NONCE}}", nonce)
+    return HTMLResponse(content)
+
+app.mount("/panel", StaticFiles(directory="panel"), name="panel-static")
 
 
 @app.get("/", tags=["Root"])

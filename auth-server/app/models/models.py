@@ -22,6 +22,12 @@ from app.db.database import Base
 # Enum Tipleri
 # ─────────────────────────────────────────────────────────────────────────────
 
+class AdminRole(str, PyEnum):
+    """Yönetici rolleri."""
+    ADMIN    = "admin"     # Full erişim
+    RESELLER = "reseller"  # Sınırlı erişim, quota ile
+
+
 class LicenseType(str, PyEnum):
     """Lisans türleri."""
     ONE_DAY    = "1d"
@@ -38,6 +44,7 @@ class LicenseStatus(str, PyEnum):
     EXPIRED   = "expired"     # Süresi doldu
     SUSPENDED = "suspended"   # Yönetici tarafından askıya alındı
     REVOKED   = "revoked"     # İptal edildi
+    BANNED    = "banned"      # Kalıcı olarak yasaklandı
 
 
 class LogAction(str, PyEnum):
@@ -54,6 +61,15 @@ class LogAction(str, PyEnum):
     LICENSE_REVOKED = "license_revoked"
     ADMIN_LOGIN     = "admin_login"
     ADMIN_LOGIN_FAIL= "admin_login_fail"
+    DISCORD_MISMATCH = "discord_mismatch"
+    ACTIVATION_LIMIT = "activation_limit"
+
+
+class ActivationAction(str, PyEnum):
+    """Aktivasyon geçmişi eylemleri."""
+    ACTIVATED   = "activated"
+    DEACTIVATED = "deactivated"
+    HWID_RESET  = "hwid_reset"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -72,15 +88,30 @@ class Admin(Base):
     )
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
+    role: Mapped[AdminRole] = mapped_column(
+        Enum(AdminRole), default=AdminRole.ADMIN, nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     last_login: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    
+    # Reseller hierarchy
+    parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("admins.id", ondelete="SET NULL")
+    )
+    
+    # Reseller quota
+    key_quota_limit: Mapped[Optional[int]] = mapped_column(Integer)  # NULL = unlimited
+    keys_created_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Relations
     licenses: Mapped[list["License"]] = relationship(
         "License", back_populates="created_by_admin"
+    )
+    parent: Mapped[Optional["Admin"]] = relationship(
+        "Admin", remote_side="Admin.id", foreign_keys=[parent_id]
     )
 
     __table_args__ = (
@@ -124,6 +155,16 @@ class License(Base):
     # HWID — hash olarak saklanır, ham veri saklanmaz
     hwid_hash: Mapped[Optional[str]] = mapped_column(String(64))
 
+    # Discord ID — zorunlu bağlama (ilk aktivasyonda set edilir)
+    discord_id: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+
+    # IP fingerprint — soft binding (uyarı amaçlı, engellemez)
+    ip_fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
+
+    # Aktivasyon kontrolü
+    activation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_activations: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
     # Not alanı
     note: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -141,6 +182,9 @@ class License(Base):
     )
     activity_logs: Mapped[list["ActivityLog"]] = relationship(
         "ActivityLog", back_populates="license", cascade="all, delete-orphan"
+    )
+    activation_history: Mapped[list["ActivationHistory"]] = relationship(
+        "ActivationHistory", back_populates="license", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -252,4 +296,39 @@ class UsedNonce(Base):
 
     __table_args__ = (
         UniqueConstraint("nonce"),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Aktivasyon Geçmişi Tablosu
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ActivationHistory(Base):
+    """
+    Her lisans aktivasyonu/deaktivasyonu için kayıt.
+    Kim, ne zaman, hangi HWID/IP ile aktive etti?
+    """
+    __tablename__ = "activation_history"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    license_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("licenses.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    action: Mapped[ActivationAction] = mapped_column(
+        Enum(ActivationAction), nullable=False
+    )
+    hwid_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45))
+    discord_id: Mapped[Optional[str]] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Relations
+    license: Mapped["License"] = relationship(
+        "License", back_populates="activation_history"
     )

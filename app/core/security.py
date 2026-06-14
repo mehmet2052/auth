@@ -56,7 +56,7 @@ def create_access_token(
     
     data içinde bulunması gerekenler:
       - sub: konu (admin username veya license key)
-      - type: "admin" | "session"
+      - type: "access"
     """
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (
@@ -65,6 +65,7 @@ def create_access_token(
     to_encode.update({
         "exp": expire,
         "iat": datetime.now(timezone.utc),
+        "type": "access",
         # jti: JWT ID — replay attack koruması
         "jti": secrets.token_hex(16),
     })
@@ -73,6 +74,57 @@ def create_access_token(
         settings.jwt_secret_key,
         algorithm=settings.jwt_algorithm
     )
+
+
+def create_refresh_token(
+    data: dict[str, Any],
+    family_id: Optional[str] = None,
+) -> tuple[str, str, datetime]:
+    """
+    JWT refresh token oluştur.
+    
+    Returns:
+        (token, jti, expires_at)
+    
+    Token rotation: her refresh'te yeni token oluşturulur.
+    Family tracking: tüm token'lar aynı family_id'ye sahip.
+    """
+    to_encode = data.copy()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days)
+    jti = secrets.token_hex(16)
+    
+    to_encode.update({
+        "exp": expires_at,
+        "iat": datetime.now(timezone.utc),
+        "type": "refresh",
+        "jti": jti,
+        "family": family_id or secrets.token_hex(16),
+    })
+    
+    token = jwt.encode(
+        to_encode,
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm
+    )
+    
+    return token, jti, expires_at
+
+
+def decode_refresh_token(token: str) -> dict[str, Any]:
+    """
+    JWT refresh token decode.
+    type="refresh" kontrolü yapılır.
+    """
+    payload = jwt.decode(
+        token,
+        settings.jwt_secret_key,
+        algorithms=[settings.jwt_algorithm]
+    )
+    
+    if payload.get("type") != "refresh":
+        raise JWTError("Invalid token type — expected refresh")
+    
+    return payload
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
@@ -142,3 +194,40 @@ def hash_key(key: str) -> str:
     return hashlib.sha256(
         (key + settings.jwt_secret_key).encode()
     ).hexdigest()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CSRF Token Yönetimi
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CSRF_PREFIX = "csrf:"
+_CSRF_TTL_SECONDS = 3600  # 1 hour
+
+
+async def generate_csrf_token() -> str:
+    """
+    CSRF token oluştur ve Redis'e kaydet.
+    Returns: token string
+    """
+    from app.core.redis import get_redis
+    token = secrets.token_hex(32)
+    redis = await get_redis()
+    await redis.setex(f"{_CSRF_PREFIX}{token}", _CSRF_TTL_SECONDS, "1")
+    return token
+
+
+async def validate_csrf_token(token: str) -> bool:
+    """
+    CSRF token doğrula — Redis'te mevcut mu ve süresi dolmamış mı?
+    Single-use: doğrulama sonrası silinir.
+    """
+    from app.core.redis import get_redis
+    if not token or len(token) != 64:
+        return False
+    redis = await get_redis()
+    key = f"{_CSRF_PREFIX}{token}"
+    exists = await redis.exists(key)
+    if exists:
+        await redis.delete(key)
+        return True
+    return False

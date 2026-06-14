@@ -9,7 +9,11 @@ from typing import Optional
 from sqlalchemy import select, update, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import License, LicenseStatus, LicenseType, ActivityLog, LogAction
+from app.models.models import (
+    License, LicenseStatus, LicenseType,
+    ActivityLog, LogAction,
+    ActivationHistory, ActivationAction,
+)
 
 
 class LicenseRepository:
@@ -57,6 +61,7 @@ class LicenseRepository:
         page: int = 1,
         page_size: int = 20,
         status_filter: Optional[LicenseStatus] = None,
+        created_by_filter: Optional[uuid.UUID] = None,
     ) -> tuple[list[License], int]:
         """Sayfalanmış lisans listesi."""
         query = select(License)
@@ -65,6 +70,10 @@ class LicenseRepository:
         if status_filter:
             query = query.where(License.status == status_filter)
             count_query = count_query.where(License.status == status_filter)
+
+        if created_by_filter:
+            query = query.where(License.created_by == created_by_filter)
+            count_query = count_query.where(License.created_by == created_by_filter)
 
         query = query.order_by(License.created_at.desc())
         query = query.offset((page - 1) * page_size).limit(page_size)
@@ -85,8 +94,35 @@ class LicenseRepository:
         license_.hwid_hash = hwid_hash
         license_.activated_at = datetime.now(timezone.utc)
         license_.expires_at = expires_at
+        license_.activation_count += 1
         await self.db.flush()
         return license_
+
+    async def bind_discord_id(
+        self,
+        license_id: uuid.UUID,
+        discord_id: str,
+    ) -> bool:
+        """Discord ID'yi lisansa bağla."""
+        result = await self.db.execute(
+            update(License)
+            .where(License.id == license_id)
+            .values(discord_id=discord_id)
+        )
+        return result.rowcount > 0
+
+    async def update_ip_fingerprint(
+        self,
+        license_id: uuid.UUID,
+        ip_hash: str,
+    ) -> bool:
+        """IP fingerprint'i güncelle (soft binding)."""
+        result = await self.db.execute(
+            update(License)
+            .where(License.id == license_id)
+            .values(ip_fingerprint=ip_hash)
+        )
+        return result.rowcount > 0
 
     async def update_status(
         self,
@@ -172,6 +208,57 @@ class ActivityLogRepository:
 
         query = query.order_by(ActivityLog.created_at.desc())
         query = query.offset((page - 1) * page_size).limit(page_size)
+
+        items_result = await self.db.execute(query)
+        count_result = await self.db.execute(count_query)
+
+        return list(items_result.scalars().all()), count_result.scalar_one()
+
+
+class ActivationHistoryRepository:
+    """Aktivasyon geçmişi veritabanı işlemleri."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def create(
+        self,
+        license_id: uuid.UUID,
+        action: ActivationAction,
+        hwid_hash: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        discord_id: Optional[str] = None,
+    ) -> ActivationHistory:
+        """Yeni aktivasyon geçmişi kaydı."""
+        record = ActivationHistory(
+            license_id=license_id,
+            action=action,
+            hwid_hash=hwid_hash,
+            ip_address=ip_address,
+            discord_id=discord_id,
+        )
+        self.db.add(record)
+        await self.db.flush()
+        return record
+
+    async def list_by_license(
+        self,
+        license_id: uuid.UUID,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[ActivationHistory], int]:
+        """Belirli bir lisansın aktivasyon geçmişi."""
+        query = (
+            select(ActivationHistory)
+            .where(ActivationHistory.license_id == license_id)
+            .order_by(ActivationHistory.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        count_query = (
+            select(func.count(ActivationHistory.id))
+            .where(ActivationHistory.license_id == license_id)
+        )
 
         items_result = await self.db.execute(query)
         count_result = await self.db.execute(count_query)

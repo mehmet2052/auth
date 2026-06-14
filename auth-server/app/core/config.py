@@ -22,10 +22,14 @@ class Settings(BaseSettings):
                 return v.replace("postgresql://", "postgresql+asyncpg://", 1)
         return v
 
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
     # JWT
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
+    access_token_expire_minutes: int = 15  # Short-lived access token
+    refresh_token_expire_days: int = 7     # Long-lived refresh token
     session_token_expire_hours: int = 24
 
     # Admin
