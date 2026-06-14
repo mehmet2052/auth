@@ -10,6 +10,7 @@ from sqlalchemy import text
 from typing import AsyncGenerator
 
 from app.core.config import get_settings
+from app.core.logging import logger
 
 settings = get_settings()
 
@@ -70,7 +71,6 @@ async def create_tables() -> None:
                 pass
 
     # 2b. Convert ALL enum columns to VARCHAR — avoids PostgreSQL enum name mismatch
-    #     (SQLAlchemy Enum stores .name by default, but we use values_callable to store .value)
     varchar_fix_sqls = [
         # admins.role → VARCHAR
         "ALTER TABLE admins ALTER COLUMN role TYPE VARCHAR(32) USING role::text",
@@ -92,8 +92,8 @@ async def create_tables() -> None:
         for sql in varchar_fix_sqls:
             try:
                 await conn.execute(text(sql))
-            except Exception:
-                pass  # Column may not exist yet or already correct type
+            except Exception as e:
+                logger.warning(f"Migration SQL skipped (non-fatal): {sql[:60]}... — {e}")
 
     # 2c. Normalize enum data to lowercase .value format
     #     (handles data inserted by old create_all() which used UPPERCASE names)

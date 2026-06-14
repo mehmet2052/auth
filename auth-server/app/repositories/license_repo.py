@@ -179,18 +179,32 @@ class ActivityLogRepository:
         ip_address: Optional[str] = None,
         hwid_hash: Optional[str] = None,
         detail: Optional[str] = None,
-    ) -> ActivityLog:
-        """Yeni log kaydı oluştur."""
-        log = ActivityLog(
-            action=action,
-            license_id=license_id,
-            ip_address=ip_address,
-            hwid_hash=hwid_hash,
-            detail=detail,
-        )
-        self.db.add(log)
-        await self.db.flush()
-        return log
+    ) -> Optional[ActivityLog]:
+        """Yeni log kaydı oluştur. Asla hata fırlatmaz — log hatası auth'u engellemez."""
+        try:
+            log = ActivityLog(
+                action=action,
+                license_id=license_id,
+                ip_address=ip_address,
+                hwid_hash=hwid_hash,
+                detail=detail,
+            )
+            self.db.add(log)
+            await self.db.flush()
+            return log
+        except Exception as e:
+            # Rollback the failed log insert without crashing the caller
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            # Log the failure but don't raise
+            try:
+                from app.core.logging import logger
+                logger.warning(f"Activity log insert failed (non-fatal): {e}")
+            except Exception:
+                pass
+            return None
 
     async def list_all(
         self,
@@ -228,18 +242,30 @@ class ActivationHistoryRepository:
         hwid_hash: Optional[str] = None,
         ip_address: Optional[str] = None,
         discord_id: Optional[str] = None,
-    ) -> ActivationHistory:
-        """Yeni aktivasyon geçmişi kaydı."""
-        record = ActivationHistory(
-            license_id=license_id,
-            action=action,
-            hwid_hash=hwid_hash,
-            ip_address=ip_address,
-            discord_id=discord_id,
-        )
-        self.db.add(record)
-        await self.db.flush()
-        return record
+    ) -> Optional[ActivationHistory]:
+        """Yeni aktivasyon geçmişi kaydı. Hata olursa sessizce döner."""
+        try:
+            record = ActivationHistory(
+                license_id=license_id,
+                action=action,
+                hwid_hash=hwid_hash,
+                ip_address=ip_address,
+                discord_id=discord_id,
+            )
+            self.db.add(record)
+            await self.db.flush()
+            return record
+        except Exception as e:
+            try:
+                await self.db.rollback()
+            except Exception:
+                pass
+            try:
+                from app.core.logging import logger
+                logger.warning(f"Activation history insert failed (non-fatal): {e}")
+            except Exception:
+                pass
+            return None
 
     async def list_by_license(
         self,

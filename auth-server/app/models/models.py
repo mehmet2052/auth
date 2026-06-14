@@ -9,17 +9,41 @@ from enum import Enum as PyEnum
 
 from sqlalchemy import (
     String, Boolean, Integer, DateTime, Text,
-    ForeignKey, Enum, Index, UniqueConstraint
+    ForeignKey, Index, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
+from sqlalchemy.types import TypeDecorator
 
 from app.db.database import Base
 
-# SQLAlchemy Enum helper: store enum .value in DB, not .name
-# This avoids PostgreSQL enum type name/value mismatches entirely
-_ev = lambda e: [m.value for m in e]
+
+class StrEnum(TypeDecorator):
+    """
+    Stores Python str-Enum as VARCHAR in the database.
+    Completely avoids PostgreSQL enum types — no name/value mismatch possible.
+    """
+    impl = String
+    cache_ok = True
+
+    def __init__(self, enum_class, length=64):
+        super().__init__()
+        self.enum_class = enum_class
+        self.impl = String(length)
+
+    def process_bind_param(self, value, dialect):
+        if value is not None:
+            return value.value if isinstance(value, self.enum_class) else str(value)
+        return None
+
+    def process_result_value(self, value, dialect):
+        if value is not None:
+            try:
+                return self.enum_class(value)
+            except ValueError:
+                return value  # Return raw string if enum lookup fails
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +117,7 @@ class Admin(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(256), nullable=False)
     role: Mapped[AdminRole] = mapped_column(
-        Enum(AdminRole, values_callable=_ev, create_type=False),
+        StrEnum(AdminRole, 32),
         default=AdminRole.ADMIN, nullable=False
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -142,10 +166,10 @@ class License(Base):
         String(64), unique=True, nullable=False, index=True
     )
     license_type: Mapped[LicenseType] = mapped_column(
-        Enum(LicenseType, values_callable=_ev, create_type=False), nullable=False
+        StrEnum(LicenseType, 32), nullable=False
     )
     status: Mapped[LicenseStatus] = mapped_column(
-        Enum(LicenseStatus, values_callable=_ev, create_type=False),
+        StrEnum(LicenseStatus, 32),
         default=LicenseStatus.ACTIVE, nullable=False
     )
 
@@ -265,7 +289,7 @@ class ActivityLog(Base):
         ForeignKey("licenses.id", ondelete="SET NULL")
     )
     action: Mapped[LogAction] = mapped_column(
-        Enum(LogAction, values_callable=_ev, create_type=False), nullable=False
+        StrEnum(LogAction, 64), nullable=False
     )
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))
     hwid_hash: Mapped[Optional[str]] = mapped_column(String(64))
@@ -327,7 +351,7 @@ class ActivationHistory(Base):
         nullable=False
     )
     action: Mapped[ActivationAction] = mapped_column(
-        Enum(ActivationAction, values_callable=_ev, create_type=False), nullable=False
+        StrEnum(ActivationAction, 64), nullable=False
     )
     hwid_hash: Mapped[Optional[str]] = mapped_column(String(64))
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))
