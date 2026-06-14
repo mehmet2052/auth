@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -87,8 +88,14 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.include_router(auth.router)
 app.include_router(admin.router)
 
-# Admin paneli — https://auth-71s4.onrender.com/panel/
+# Admin paneli — /panel/
 app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
+
+
+@app.get("/", tags=["Root"])
+async def root():
+    """Root path → panel'e yönlendir."""
+    return RedirectResponse(url="/panel/")
 
 
 @app.get("/health", tags=["Health"])

@@ -3,7 +3,7 @@
  * API ile iletişim, lisans yönetimi, log görüntüleme.
  */
 
-const API_BASE = "https://auth-71s4.onrender.com";
+const API_BASE = "";
 let authToken = null;
 let currentPage = { licenses: 1, logs: 1 };
 
@@ -24,6 +24,7 @@ async function apiCall(method, path, body = null, isAdmin = true) {
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
+        if (res.status === 401) doLogout();
         throw new Error(data.detail || data.error || `HTTP ${res.status}`);
     }
     return data;
@@ -70,14 +71,22 @@ function doLogout() {
     document.getElementById("login-page").classList.remove("hidden");
 }
 
-// Auto-login tokeni varsa
+// Auto-login tokeni varsa önce geçerliliğini doğrula
 window.addEventListener("load", () => {
     const saved = localStorage.getItem("nexus_token");
     if (saved) {
         authToken = saved;
-        document.getElementById("login-page").classList.add("hidden");
-        document.getElementById("dashboard").classList.remove("hidden");
-        loadLicenses(1);
+        // Token geçerli mi kontrol et, UI'yı sadece geçerliyse değiştir
+        apiCall("GET", "/api/v1/admin/licenses?page=1&page_size=1")
+            .then(() => {
+                document.getElementById("login-page").classList.add("hidden");
+                document.getElementById("dashboard").classList.remove("hidden");
+                loadLicenses(1);
+            })
+            .catch(() => {
+                authToken = null;
+                localStorage.removeItem("nexus_token");
+            });
     }
 
     // Enter tuşu ile login
@@ -109,14 +118,10 @@ async function loadLicenses(page = 1) {
     let url = `/api/v1/admin/licenses?page=${page}&page_size=20`;
     if (status) url += `&status_filter=${status}`;
 
-    try {
-        const data = await apiCall("GET", url);
-        renderLicenses(data.items);
-        renderPagination("lic-pagination", data.page, data.total, 20, loadLicenses);
-        renderStats(data.items, data.total);
-    } catch (e) {
-        if (e.message.includes("401")) doLogout();
-    }
+    const data = await apiCall("GET", url);
+    renderLicenses(data.items);
+    renderPagination("lic-pagination", data.page, data.total, 20, loadLicenses);
+    renderStats(data.items, data.total);
 }
 
 function renderLicenses(items) {
@@ -233,14 +238,10 @@ async function doHwidReset() {
 
 async function loadLogs(page = 1) {
     currentPage.logs = page;
-    try {
-        const data = await apiCall("GET",
-            `/api/v1/admin/logs?page=${page}&page_size=50`);
-        renderLogs(data.items);
-        renderPagination("log-pagination", data.page, data.total, 50, loadLogs);
-    } catch (e) {
-        if (e.message.includes("401")) doLogout();
-    }
+    const data = await apiCall("GET",
+        `/api/v1/admin/logs?page=${page}&page_size=50`);
+    renderLogs(data.items);
+    renderPagination("log-pagination", data.page, data.total, 50, loadLogs);
 }
 
 function renderLogs(items) {
