@@ -56,31 +56,50 @@ async def create_tables() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
     # 2. Auto-migration: mevcut tablolara eksik kolonları ekle
-    #    ADD COLUMN IF NOT EXISTS — PostgreSQL 9.6+ destekler
     migration_sqls = [
         # ── admins: RBAC kolonları ──
-        # adminrole enum — UPPERCASE to match SQLAlchemy's create_all()
         "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'adminrole') THEN CREATE TYPE adminrole AS ENUM ('ADMIN', 'RESELLER'); END IF; END $$",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS role adminrole NOT NULL DEFAULT 'ADMIN'",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES admins(id) ON DELETE SET NULL",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS key_quota_limit INTEGER",
         "ALTER TABLE admins ADD COLUMN IF NOT EXISTS keys_created_count INTEGER NOT NULL DEFAULT 0",
-        # Ensure existing admins have role=ADMIN
-        "UPDATE admins SET role = 'ADMIN' WHERE role IS NULL",
-        # ── licenses: hardening kolonları ──
-        "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS discord_id VARCHAR(32)",
-        "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS ip_fingerprint VARCHAR(64)",
-        "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS activation_count INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS max_activations INTEGER NOT NULL DEFAULT 1",
-        # ── licensestatus enum'a 'BANNED' ekle ──
-        "DO $$ BEGIN ALTER TYPE licensestatus ADD VALUE 'BANNED'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
     ]
     async with engine.begin() as conn:
         for sql in migration_sqls:
             try:
                 await conn.execute(text(sql))
             except Exception:
-                pass  # Kolon/tip zaten mevcut — güvenli şekilde atla
+                pass
+
+    # 2b. Fix role column — convert from VARCHAR to adminrole enum if needed
+    #     (handles case where previous deploy created it as VARCHAR with lowercase values)
+    role_fix_sqls = [
+        "UPDATE admins SET role = UPPER(role::text)",
+        "ALTER TABLE admins ALTER COLUMN role TYPE adminrole USING role::text::adminrole",
+        "ALTER TABLE admins ALTER COLUMN role SET DEFAULT 'ADMIN'",
+        "UPDATE admins SET role = 'ADMIN' WHERE role IS NULL",
+    ]
+    async with engine.begin() as conn:
+        for sql in role_fix_sqls:
+            try:
+                await conn.execute(text(sql))
+            except Exception:
+                pass
+
+    # 2c. Licenses hardening columns
+    license_sqls = [
+        "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS discord_id VARCHAR(32)",
+        "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS ip_fingerprint VARCHAR(64)",
+        "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS activation_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE licenses ADD COLUMN IF NOT EXISTS max_activations INTEGER NOT NULL DEFAULT 1",
+        "DO $$ BEGIN ALTER TYPE licensestatus ADD VALUE 'BANNED'; EXCEPTION WHEN duplicate_object THEN NULL; END $$",
+    ]
+    async with engine.begin() as conn:
+        for sql in license_sqls:
+            try:
+                await conn.execute(text(sql))
+            except Exception:
+                pass
 
     # 3. Yeni tabloları oluştur (activation_history — create_all halleder ama garanti olsun)
     activation_history_sql = """
