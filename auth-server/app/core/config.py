@@ -3,12 +3,24 @@ Uygulama konfigürasyonu — .env dosyasından okunur.
 Pydantic Settings ile tip güvenliği sağlanır.
 """
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 
 
 class Settings(BaseSettings):
     # Database
     database_url: str
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def fix_database_url(cls, v: str) -> str:
+        """Render/Heroku postgres:// → asyncpg uyumlu URL."""
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql+asyncpg://", 1)
+            if v.startswith("postgresql://") and "+asyncpg" not in v:
+                return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     # JWT
     jwt_secret_key: str

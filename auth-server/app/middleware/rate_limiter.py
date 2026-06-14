@@ -8,8 +8,17 @@ from slowapi.errors import RateLimitExceeded
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+
+def _get_client_ip(request: Request) -> str:
+    """Render/nginx proxy arkasında gerçek istemci IP'si."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return get_remote_address(request)
+
+
 # IP'ye göre rate limit
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=_get_client_ip)
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):

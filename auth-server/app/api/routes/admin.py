@@ -36,7 +36,7 @@ async def admin_login(
     body: AdminLoginRequest,
     db: DBDep,
 ) -> AdminLoginResponse:
-    """Admin giriş endpoint'i. Rate limit: 5/dk."""
+    """Admin giriş endpoint'i. Rate limit: 5/dk. API secret gerektirmez."""
     ip = request.client.host if request.client else None
     service = AdminService(db)
     try:

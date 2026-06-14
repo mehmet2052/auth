@@ -5,9 +5,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from slowapi import _rate_limit_exceeded_handler
+from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.core.config import get_settings
 from app.core.logging import setup_logging, logger
@@ -61,7 +61,6 @@ app = FastAPI(
     description="CS2 External ESP Lisanslama ve Doğrulama Sistemi",
     version="1.0.0",
     lifespan=lifespan,
-    # Production'da docs kapalı
     docs_url="/docs" if settings.debug else None,
     redoc_url="/redoc" if settings.debug else None,
     openapi_url="/openapi.json" if settings.debug else None,
@@ -69,12 +68,10 @@ app = FastAPI(
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 
-# TrustedHost middleware kaldırıldı — Render proxy ile uyumsuz
-
-# CORS — panel origin'lerine izin ver
+# CORS — panel URL whitelist. Render proxy uyumu için allow_credentials=False
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Panel deploy URL'si
+    allow_origins=settings.cors_origins_list if not settings.debug else ["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
@@ -82,12 +79,16 @@ app.add_middleware(
 
 # Rate Limiter
 app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # ── Router'lar ────────────────────────────────────────────────────────────────
 
 app.include_router(auth.router)
 app.include_router(admin.router)
+
+# Admin paneli — https://auth-71s4.onrender.com/panel/
+app.mount("/panel", StaticFiles(directory="panel", html=True), name="panel")
 
 
 @app.get("/health", tags=["Health"])

@@ -14,6 +14,8 @@ let currentPage = { licenses: 1, logs: 1 };
 async function apiCall(method, path, body = null, isAdmin = true) {
     const headers = { "Content-Type": "application/json" };
     if (isAdmin && authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    // X-Nexus-Secret sadece /api/v1/auth ve /api/v1/heartbeat için gerekli (client endpoint'leri)
+    // Admin endpoint'leri JWT ile korunur, secret header gerektirmez
 
     const opts = { method, headers };
     if (body) opts.body = JSON.stringify(body);
